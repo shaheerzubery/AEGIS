@@ -77,6 +77,67 @@ def _proxy_get(url: str, timeout: float = 3.0):
         return resp.status, json.loads(resp.read())
 
 
+def _summarize_llm_events(events: list[dict]) -> dict:
+    """Pure aggregation over `llm_call` audit events (newest first)."""
+    calls = []
+    for e in events:
+        llm = e.get("llm") or {}
+        content = llm.get("content") or {}
+        calls.append(
+            {
+                "event_id": e.get("event_id"),
+                "timestamp": e.get("timestamp"),
+                "session_id": e.get("session_id"),
+                "provider": llm.get("provider"),
+                "model": llm.get("model"),
+                "input_tokens": llm.get("input_tokens"),
+                "output_tokens": llm.get("output_tokens"),
+                "latency_ms": llm.get("latency_ms"),
+                "cost_usd": llm.get("cost_usd"),
+                "prompt_injection_suspected": bool(llm.get("prompt_injection_suspected")),
+                "flagged": any(c.get("flagged") for c in content.values()),
+                "categories": sorted({cat for c in content.values() for cat in c.get("categories", [])}),
+                "types": sorted({t for c in content.values() for t in c.get("types", [])}),
+                "scanned": bool(content) and all(c.get("scanned") for c in content.values()),
+            }
+        )
+
+    def num(key):
+        return [c[key] for c in calls if isinstance(c.get(key), (int, float))]
+
+    latencies = sorted(num("latency_ms"))
+    p95 = latencies[min(len(latencies) - 1, int(len(latencies) * 0.95))] if latencies else None
+
+    by_model: dict[str, dict] = {}
+    for c in calls:
+        m = by_model.setdefault(
+            f"{c['provider'] or '?'}/{c['model'] or '?'}",
+            {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "flagged": 0},
+        )
+        m["calls"] += 1
+        m["input_tokens"] += c["input_tokens"] or 0
+        m["output_tokens"] += c["output_tokens"] or 0
+        m["cost_usd"] += c["cost_usd"] or 0.0
+        m["flagged"] += 1 if c["flagged"] else 0
+
+    return {
+        "totals": {
+            "calls": len(calls),
+            "input_tokens": sum(num("input_tokens")),
+            "output_tokens": sum(num("output_tokens")),
+            "cost_usd": sum(num("cost_usd")),
+            "avg_latency_ms": sum(latencies) / len(latencies) if latencies else None,
+            "p95_latency_ms": p95,
+            "flagged_calls": sum(1 for c in calls if c["flagged"]),
+            "prompt_injection_suspected": sum(1 for c in calls if c["prompt_injection_suspected"]),
+            "unscanned_calls": sum(1 for c in calls if not c["scanned"]),
+        },
+        "by_model": by_model,
+        "flagged": [c for c in calls if c["flagged"]][:50],
+        "recent": calls[:50],
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     # See packages/circuit-breaker/circuit_breaker.py's Handler for why —
     # HTTP/1.0 (the stdlib default) forces a connection close after every
@@ -186,6 +247,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(status, body)
         except (urllib.error.URLError, OSError) as exc:
             self._send_json(502, {"error": f"audit logger unreachable: {exc}"})
+
+    def _handle_llm(self, qs: dict):
+        """LLM observability: token/cost/latency totals and prompt-injection
+        findings, aggregated server-side from the tenant's `llm_call` audit
+        events (written by aegis_sdk's AegisClient.record_llm_call()). The
+        tenant comes from the API key like every other handler here."""
+        limit = qs.get("limit", ["500"])[0]
+        try:
+            limit = max(1, min(int(limit), 5000))
+        except ValueError:
+            limit = 500
+        url = f"{AUDIT_URL}/events?limit={limit}&tenant_id={self.tenant_id}&event_type=llm_call"
+        try:
+            status, events = _proxy_get(url)
+        except (urllib.error.URLError, OSError) as exc:
+            self._send_json(502, {"error": f"audit logger unreachable: {exc}"})
+            return
+        if status != 200:
+            self._send_json(status, events)
+            return
+        self._send_json(200, _summarize_llm_events(events))
 
     def _handle_verify(self):
         try:
@@ -351,6 +433,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_status()
         elif parsed.path == "/api/events":
             self._handle_events(qs)
+        elif parsed.path == "/api/llm":
+            self._handle_llm(qs)
         elif parsed.path == "/api/events/verify":
             self._handle_verify()
         elif len(parts) == 4 and parts[:3] == ["api", "breaker", "status"]:

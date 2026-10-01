@@ -79,7 +79,45 @@ export interface SuspendedSession {
   terminated: boolean;
 }
 
+export interface LlmCall {
+  event_id: string;
+  timestamp: string;
+  session_id: string;
+  provider: string | null;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  latency_ms: number | null;
+  cost_usd: number | null;
+  prompt_injection_suspected: boolean;
+  flagged: boolean;
+  categories: string[];
+  types: string[];
+  scanned: boolean;
+}
+
+export interface LlmSummary {
+  totals: {
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+    avg_latency_ms: number | null;
+    p95_latency_ms: number | null;
+    flagged_calls: number;
+    prompt_injection_suspected: number;
+    unscanned_calls: number;
+  };
+  by_model: Record<
+    string,
+    { calls: number; input_tokens: number; output_tokens: number; cost_usd: number; flagged: number }
+  >;
+  flagged: LlmCall[];
+  recent: LlmCall[];
+}
+
 export const api = {
+  llm: (apiKey: string) => getJSON<LlmSummary>(apiKey, "/api/llm"),
   status: (apiKey: string) => getJSON<ServiceStatus>(apiKey, "/api/status"),
   events: (apiKey: string, limit: number, sessionId?: string) =>
     getJSON<AuditEvent[]>(apiKey, `/api/events?limit=${limit}${sessionId ? `&session_id=${sessionId}` : ""}`),

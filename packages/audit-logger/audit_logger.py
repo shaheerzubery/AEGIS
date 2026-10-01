@@ -227,7 +227,11 @@ def _forward_to_siem(event: dict) -> None:
 
 
 def list_events(
-    conn, limit: int = 20, session_id: str | None = None, tenant_id: str | None = None
+    conn,
+    limit: int = 20,
+    session_id: str | None = None,
+    tenant_id: str | None = None,
+    event_type: str | None = None,
 ) -> list:
     clauses = []
     params: list = []
@@ -237,6 +241,9 @@ def list_events(
     if session_id:
         clauses.append(f"session_id = {PARAM}")
         params.append(session_id)
+    if event_type:
+        clauses.append(f"event_type = {PARAM}")
+        params.append(event_type)
 
     where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
     params.append(limit)
@@ -315,8 +322,9 @@ class Handler(BaseHTTPRequestHandler):
             limit = int(qs.get("limit", ["20"])[0])
             session_id = qs.get("session_id", [None])[0]
             tenant_id = qs.get("tenant_id", [None])[0]
+            event_type = qs.get("event_type", [None])[0]
             conn = get_conn()
-            self._send_json(200, list_events(conn, limit, session_id, tenant_id))
+            self._send_json(200, list_events(conn, limit, session_id, tenant_id, event_type))
         elif parsed.path == "/verify":
             qs = parse_qs(parsed.query)
             tenant_id = qs.get("tenant_id", [DEFAULT_TENANT])[0]

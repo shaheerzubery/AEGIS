@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, type AuditEvent, type ServiceStatus, type SuspendedSession } from "./api";
+import { api, ApiError, type AuditEvent, type LlmSummary, type ServiceStatus, type SuspendedSession } from "./api";
 import "./app.css";
 
-type Tab = "check" | "credential" | "approvals" | "audit";
+type Tab = "check" | "credential" | "approvals" | "audit" | "llm";
 
 const API_KEY_STORAGE_KEY = "aegis-dashboard-api-key";
 
@@ -282,6 +282,143 @@ function AuditTab({ apiKey }: { apiKey: string }) {
   );
 }
 
+const fmt = (n: number | null | undefined, digits = 0) => (n == null ? "-" : n.toFixed(digits));
+
+function LlmTab({ apiKey }: { apiKey: string }) {
+  const [data, setData] = useState<LlmSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = () =>
+    api
+      .llm(apiKey)
+      .then((d) => {
+        setData(d);
+        setError(null);
+      })
+      .catch((err) => setError(errorMessage(err)));
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
+
+  const t = data?.totals;
+  return (
+    <div className="panel">
+      <h3>LLM usage and prompt-injection findings (current tenant)</h3>
+      <p className="hint">
+        From <code>llm_call</code> audit events recorded by <code>AegisClient.record_llm_call()</code> (last 500
+        calls). Prompt and response text is never stored, only hashes and guardrail verdicts.
+      </p>
+      <button onClick={refresh}>Refresh</button>
+      {error && <div className="result bad">{error}</div>}
+      {t && (
+        <>
+          <div className="statusbar">
+            <span>calls: {t.calls}</span>
+            <span>
+              tokens: {t.input_tokens} in / {t.output_tokens} out
+            </span>
+            <span>cost: ${t.cost_usd.toFixed(4)}</span>
+            <span>
+              latency: avg {fmt(t.avg_latency_ms)} ms, p95 {fmt(t.p95_latency_ms)} ms
+            </span>
+            <span className={t.prompt_injection_suspected ? "status-down" : "status-up"}>
+              suspected injections: {t.prompt_injection_suspected}
+            </span>
+            <span className={t.flagged_calls ? "status-down" : "status-up"}>flagged calls: {t.flagged_calls}</span>
+            {t.unscanned_calls > 0 && <span className="status-down">unscanned: {t.unscanned_calls}</span>}
+          </div>
+
+          <h4>By model</h4>
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Calls</th>
+                <th>Input tokens</th>
+                <th>Output tokens</th>
+                <th>Cost (USD)</th>
+                <th>Flagged</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(data.by_model).map(([model, m]) => (
+                <tr key={model}>
+                  <td>{model}</td>
+                  <td>{m.calls}</td>
+                  <td>{m.input_tokens}</td>
+                  <td>{m.output_tokens}</td>
+                  <td>{m.cost_usd.toFixed(4)}</td>
+                  <td>{m.flagged}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <h4>Flagged calls (PII / prompt injection / toxic)</h4>
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Session</th>
+                <th>Model</th>
+                <th>Categories</th>
+                <th>Matched patterns</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.flagged.length === 0 && (
+                <tr>
+                  <td colSpan={5}>No flagged calls.</td>
+                </tr>
+              )}
+              {data.flagged.map((c) => (
+                <tr key={c.event_id}>
+                  <td>{c.timestamp}</td>
+                  <td>{c.session_id}</td>
+                  <td>{c.model}</td>
+                  <td>{c.categories.join(", ")}</td>
+                  <td>{c.types.join(", ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <h4>Recent calls</h4>
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Session</th>
+                <th>Model</th>
+                <th>Tokens in/out</th>
+                <th>Latency (ms)</th>
+                <th>Cost</th>
+                <th>Verdict</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.recent.map((c) => (
+                <tr key={c.event_id}>
+                  <td>{c.timestamp}</td>
+                  <td>{c.session_id}</td>
+                  <td>{c.model}</td>
+                  <td>
+                    {c.input_tokens ?? "-"} / {c.output_tokens ?? "-"}
+                  </td>
+                  <td>{fmt(c.latency_ms)}</td>
+                  <td>{c.cost_usd == null ? "-" : c.cost_usd.toFixed(4)}</td>
+                  <td>{!c.scanned ? "not scanned" : c.flagged ? `FLAGGED: ${c.categories.join(", ")}` : "clean"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("check");
   const [apiKey, setApiKey] = useApiKey();
@@ -319,7 +456,7 @@ export default function App() {
       </div>
 
       <div className="tabs">
-        {(["check", "credential", "approvals", "audit"] as Tab[]).map((t) => (
+        {(["check", "credential", "approvals", "audit", "llm"] as Tab[]).map((t) => (
           <button key={t} className={tab === t ? "tab active" : "tab"} onClick={() => setTab(t)}>
             {t}
           </button>
@@ -330,6 +467,7 @@ export default function App() {
       {tab === "credential" && <CredentialTab apiKey={apiKey} sessionId={sessionId} isOperator={isOperator} />}
       {tab === "approvals" && <ApprovalsTab apiKey={apiKey} isOperator={isOperator} />}
       {tab === "audit" && <AuditTab apiKey={apiKey} />}
+      {tab === "llm" && <LlmTab apiKey={apiKey} />}
     </div>
   );
 }

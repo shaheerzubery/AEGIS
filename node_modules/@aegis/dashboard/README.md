@@ -95,3 +95,14 @@ coverage.
   before any real deployment.
 - No key rotation/expiry, and no per-tenant limit on how many
   operator/viewer keys exist.
+
+## LLM usage and prompt-injection tab
+
+`GET /api/llm` aggregates the tenant's `llm_call` audit events (written by
+`AegisClient.record_llm_call()` in `packages/sdk`) into totals (calls,
+tokens, cost, avg/p95 latency, flagged calls, suspected injections), a
+per-model breakdown, and lists of flagged and recent calls. Backed by a new
+`event_type` filter on the audit logger's `GET /events`. The React app shows
+it in the "llm" tab. Read-only, so a `viewer` key can see it. Rebuild the
+`audit-logger` and dashboard-api images after pulling this
+(`docker compose up -d --build`).
