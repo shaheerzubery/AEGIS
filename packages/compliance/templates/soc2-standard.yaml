@@ -1,0 +1,74 @@
+# AEGIS policy template — SOC 2 "standard" posture.
+#
+# Same shape as packages/policy-engine/policy.example.yaml — apply exactly
+# the same way, no new mechanism:
+#   aegisctl policy apply --tenant <name> packages/compliance/templates/soc2-standard.yaml
+#
+# Every field below is commented with the Trust Services Criteria control
+# it maps to — see ../CONTROL_MAPPING.md for the full rationale table.
+# This is a starting point for a real auditor conversation, not a
+# certification — see CONTROL_MAPPING.md's disclaimer.
+#
+# "Standard" = deny-by-default with a working allowlist for a typical
+# read/API-calling agent, moderate rate limits, no operational-hours
+# restriction, the same violation threshold this repo's other defaults
+# use. A more usable starting point than soc2-strict.yaml for an agent
+# that needs to do real work, while still keeping every control active.
+
+profile:
+  name: soc2-standard
+  description: >
+    Moderate-privilege containment profile for SOC 2-relevant
+    deployments — deny-by-default with a working allowlist, all controls
+    active, thresholds tuned for a real (not maximally locked-down) agent.
+
+allowed_actions:
+  - type: http_request
+    methods: [GET]
+    targets: ["api.github.com", "registry.npmjs.org"]
+  - type: file_read
+    paths: ["/data/**"]
+
+denied_actions:
+  - type: shell_exec
+  - type: credential_access
+  - type: http_request
+    methods: [POST, PUT, DELETE]
+
+# CC6.8 — restriction of unauthorized/malicious network destinations.
+network:
+  default_action: deny
+  allowed_domains:
+    - example.com
+  denied_domains: []
+
+# CC6.1 / CC6.6 — logical access restricted to authorized users, enforced
+# as least privilege.
+allowed_tools:
+  - read_file
+
+# C1.1 / C1.2 — confidentiality: credential broker allowlist limited to
+# one action on one service, not a blanket grant.
+allowed_credential_actions:
+  protected-api:
+    - profile
+
+# CC7.1 — configuration baselines.
+rate_limits:
+  max_actions_per_minute: 40
+  max_data_volume_mb_per_session: 100
+
+# CC6.1 — no operational-hours restriction by default; narrow this if the
+# deploying organization's own policy requires it.
+time_constraints:
+  operational_hours: "00:00-23:59"
+
+# CC7.3 / CC7.4 — incident evaluation and response, at this repo's other
+# default threshold (see packages/circuit-breaker's AEGIS_VIOLATION_THRESHOLD).
+escalation:
+  on_denied_action: soft_pause
+  on_repeated_violations:
+    threshold: 5
+    window_seconds: 60
+    action: hard_suspend
+  on_self_modification_attempt: emergency_kill

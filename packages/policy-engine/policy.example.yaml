@@ -1,0 +1,57 @@
+# AEGIS policy profile — example (proposal §4.6)
+# Applies to a single agent / containment zone.
+#
+# Sprint 4: this is the "default" tenant's policy. Apply it with
+# `aegisctl policy apply --tenant default policy.example.yaml` (or omit
+# --tenant entirely — "default" is the flag's default value). See
+# policy.tenant-acme.example.yaml for a second, differently-configured
+# tenant, and packages/policy-engine/policies/default.rego for how tenant_id
+# scopes policy evaluation.
+
+profile:
+  name: example-readonly-agent
+  description: Agent may read files and call two allowlisted APIs. Nothing else.
+
+allowed_actions:
+  - type: http_request
+    methods: [GET]
+    targets: ["api.github.com", "registry.npmjs.org"]
+  - type: file_read
+    paths: ["/data/**"]
+
+denied_actions:
+  - type: shell_exec
+  - type: credential_access
+  - type: http_request
+    methods: [POST, PUT, DELETE]
+
+network:
+  default_action: deny
+  allowed_domains:
+    - example.com
+  denied_domains: []
+
+# AEGIS-specific extension beyond the proposal's baseline schema (§4.6) —
+# default.rego needs these to evaluate tool_call and credential_use actions,
+# not just network/file actions.
+allowed_tools:
+  - read_file
+
+allowed_credential_actions:
+  protected-api:
+    - profile
+
+rate_limits:
+  max_actions_per_minute: 60
+  max_data_volume_mb_per_session: 100
+
+time_constraints:
+  operational_hours: "00:00-23:59" # placeholder — no restriction by default
+
+escalation:
+  on_denied_action: soft_pause
+  on_repeated_violations:
+    threshold: 5
+    window_seconds: 60
+    action: hard_suspend
+  on_self_modification_attempt: emergency_kill

@@ -1,0 +1,5 @@
+# Only needed for `compliance_report.py --format pdf` — markdown/json
+# output need nothing beyond the stdlib. Isolated to this one standalone
+# script; not added to any container image (see docs/configuration.md
+# and this package's README for why).
+fpdf2>=2.7

@@ -1,0 +1,54 @@
+# AEGIS policy profile — second demo tenant (Sprint 4 multi-tenancy).
+#
+# Deliberately configured differently from policy.example.yaml's "default"
+# tenant (different allowed domain, an extra tool, a tighter rate limit) so
+# tenant isolation is demonstrable: apply this with
+# `aegisctl policy apply --tenant tenant-acme policy.tenant-acme.example.yaml`
+# and confirm actions allowed for one tenant are denied for the other, even
+# when using the exact same session_id string.
+
+profile:
+  name: tenant-acme-agent
+  description: Second demo tenant, isolated from "default" (see policy.example.yaml).
+
+allowed_actions:
+  - type: http_request
+    methods: [GET]
+    targets: ["acme.example"]
+  - type: file_read
+    paths: ["/data/**"]
+
+denied_actions:
+  - type: shell_exec
+  - type: credential_access
+  - type: http_request
+    methods: [POST, PUT, DELETE]
+
+network:
+  default_action: deny
+  allowed_domains:
+    - acme.example
+  denied_domains: []
+
+allowed_tools:
+  - read_file
+  - send_email
+
+allowed_credential_actions:
+  protected-api:
+    - profile
+
+rate_limits:
+  max_actions_per_minute: 30
+  max_data_volume_mb_per_session: 100
+
+time_constraints:
+  operational_hours: "00:00-23:59" # placeholder — no restriction by default
+
+escalation:
+  on_denied_action: soft_pause
+  on_repeated_violations:
+    threshold: 5
+    window_seconds: 60
+    action: hard_suspend
+  on_self_modification_attempt: emergency_kill

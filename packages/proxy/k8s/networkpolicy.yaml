@@ -1,0 +1,65 @@
+# Proposal §4.5: "Kubernetes NetworkPolicy routes all egress through the
+# AEGIS proxy." Important, honest caveat this manifest does NOT paper over:
+#
+# NetworkPolicy operates at the Pod boundary — it cannot see or distinguish
+# traffic between containers that share a Pod's network namespace. It
+# therefore CANNOT force the "agent" container specifically through the
+# "aegis-proxy" container; that's done by the agent's HTTP_PROXY/HTTPS_PROXY
+# env vars (see deployment.yaml) pointing at localhost:10000, same mechanism
+# as the Docker Compose demo. Domain-level allow/deny (example.com vs.
+# httpbin.org) is Envoy+OPA's job (Layer 1/3), unchanged here.
+#
+# What NetworkPolicy *does* add at the Kubernetes layer: pod-level network
+# segmentation — this Pod can only reach DNS and the AEGIS control-plane
+# services (audit-logger, circuit-breaker, credential-vault, opa if it's
+# ever split into its own Pod), not arbitrary other pods/namespaces in the
+# cluster. That's a real, additional containment boundary (defense-in-depth,
+# proposal §3.1) — it just isn't the domain-filtering mechanism itself.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aegis-sidecar-demo-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: aegis-sidecar-demo
+  policyTypes:
+    - Egress
+  egress:
+    # DNS — needed for the proxy's own upstream resolution and for the
+    # control-plane service names below.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # AEGIS control-plane services, if deployed as separate Pods/Services in
+    # this namespace (audit-logger, circuit-breaker, credential-vault).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: aegis
+      ports:
+        - protocol: TCP
+          port: 9300 # audit-logger
+        - protocol: TCP
+          port: 9400 # circuit-breaker
+        - protocol: TCP
+          port: 9600 # credential-vault
+
+    # The actual internet egress that legitimate allowed requests need.
+    # NetworkPolicy is CIDR/port-based, not domain-based — it cannot express
+    # "example.com yes, httpbin.org no" (that's Envoy+OPA's job). Restricting
+    # this further to specific CIDR ranges is a real hardening step left for
+    # a production deployment, deliberately not hardcoded here.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80

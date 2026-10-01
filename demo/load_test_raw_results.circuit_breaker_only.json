@@ -1,0 +1,30 @@
+[
+  {
+    "concurrency": 25,
+    "duration": 10.015000000001237,
+    "total_requests": 3651,
+    "throughput_rps": 364.55317024458805,
+    "mean_ms": 63.28540125992388,
+    "p50_ms": 47.00000000048021,
+    "p95_ms": 156.9999999992433,
+    "p99_ms": 235.00000000058208,
+    "error_count": 0,
+    "client_side_error_count": 0,
+    "correctness_mismatches": 0,
+    "aborted": false
+  },
+  {
+    "concurrency": 100,
+    "duration": 10.15599999999904,
+    "total_requests": 2076,
+    "throughput_rps": 204.4111855061241,
+    "mean_ms": 463.07225433528805,
+    "p50_ms": 250.0,
+    "p95_ms": 2015.9999999996217,
+    "p99_ms": 3577.99999999952,
+    "error_count": 0,
+    "client_side_error_count": 0,
+    "correctness_mismatches": 0,
+    "aborted": true
+  }
+]

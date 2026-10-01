@@ -1,0 +1,4 @@
+# Only needed for AUDIT_STORAGE_BACKEND = "postgres" (see config.py). The
+# default "sqlite" backend needs nothing beyond the stdlib. Isolated to
+# this one service.
+psycopg[binary]>=3.1

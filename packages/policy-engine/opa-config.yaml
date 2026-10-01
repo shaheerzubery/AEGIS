@@ -1,0 +1,8 @@
+# OPA's built-in Envoy External Authorization plugin (Day 3).
+# Envoy's ext_authz filter calls this gRPC endpoint on every request; OPA
+# evaluates data.aegis.authz.allow (packages/policy-engine/policies/default.rego).
+plugins:
+  envoy_ext_authz_grpc:
+    addr: :9191
+    query: data.aegis.authz.allow
+    dry-run: false

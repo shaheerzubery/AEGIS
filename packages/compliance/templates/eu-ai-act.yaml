@@ -1,0 +1,82 @@
+# AEGIS policy template — EU AI Act high-risk-system-relevant posture.
+#
+# Same shape as packages/policy-engine/policy.example.yaml — apply exactly
+# the same way, no new mechanism:
+#   aegisctl policy apply --tenant <name> packages/compliance/templates/eu-ai-act.yaml
+#
+# Every field below is commented with the EU AI Act article it maps to —
+# see ../EU_AI_ACT_MAPPING.md for the full rationale table AND its
+# disclaimer (this is a starting point for a real conformity-assessment
+# conversation, not a certification).
+#
+# Unlike hipaa.yaml/pci-dss.yaml, the Act's core technical asks
+# (Article 12 logging, Article 14 human oversight, Article 15
+# robustness) aren't primarily about how narrow this policy file's
+# allowlists are — they're already satisfied by audit-logger,
+# circuit-breaker, anomaly-detector, and content-guardrail simply being
+# active (see ../EU_AI_ACT_MAPPING.md). This template is closer to
+# soc2-standard.yaml's working-agent posture than the strict lockdown of
+# hipaa.yaml/pci-dss.yaml, but with a LOWER violation threshold —
+# Article 14's human-oversight emphasis argues for a human seeing
+# trouble sooner, not for the agent doing less work day to day.
+
+profile:
+  name: eu-ai-act
+  description: >
+    Moderate-privilege containment profile for a high-risk AI system
+    deployment — working allowlist for real tasks, all layers active,
+    tighter human-oversight threshold than a typical SOC 2 posture.
+
+allowed_actions:
+  - type: http_request
+    methods: [GET]
+    targets: ["api.github.com", "registry.npmjs.org"]
+  - type: file_read
+    paths: ["/data/**"]
+
+denied_actions:
+  - type: shell_exec
+  - type: credential_access
+  - type: http_request
+    methods: [POST, PUT, DELETE]
+
+# Article 9 — risk management: network egress restricted to an explicit
+# allowlist, not deny-everything — a working agent needs it, and the
+# risk-management case here rests on the layers below detecting misuse,
+# not on the agent doing nothing.
+network:
+  default_action: deny
+  allowed_domains:
+    - example.com
+  denied_domains: []
+
+# Article 9 — least-privilege as one risk-mitigation control among several.
+allowed_tools:
+  - read_file
+
+allowed_credential_actions:
+  protected-api:
+    - profile
+
+# Article 9 — configuration baselines, moderate (same as
+# soc2-standard.yaml).
+rate_limits:
+  max_actions_per_minute: 40
+  max_data_volume_mb_per_session: 100
+
+time_constraints:
+  operational_hours: "00:00-23:59"
+
+# Article 14 — human oversight. Three violations (between soc2-standard's
+# 5 and the strict templates' 2) before automatic suspension, reflecting
+# the Act's specific emphasis on a human being able to intervene
+# promptly — self-modification attempts still escalate immediately
+# regardless of this threshold (see packages/anomaly-detector's
+# self_modification rule).
+escalation:
+  on_denied_action: soft_pause
+  on_repeated_violations:
+    threshold: 3
+    window_seconds: 60
+    action: hard_suspend
+  on_self_modification_attempt: emergency_kill

@@ -1,0 +1,12 @@
+{
+  "name": "aegis",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI Agent Containment & Guardrail Platform",
+  "workspaces": [
+    "packages/dashboard"
+  ],
+  "scripts": {
+    "dashboard:dev": "npm run dev --workspace packages/dashboard"
+  }
+}

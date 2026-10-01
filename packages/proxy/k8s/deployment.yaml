@@ -1,0 +1,79 @@
+# Sidecar Pod: agent + aegis-proxy (Envoy) + opa, matching the roles in
+# demo/docker-compose.yml. The agent container is a placeholder — swap the
+# image/command for the real agent workload.
+#
+# Note on directory structure: packages/policy-engine/policies/policy/data.yaml
+# must land at /policies/policy/data.yaml inside the OPA container (not flattened
+# into /policies/data.yaml) — OPA namespaces data files under `data.policy.*`
+# based on that directory path (see packages/policy-engine/policies/default.rego).
+# The subPath mounts below preserve that structure even though both files come
+# from the same ConfigMap.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegis-sidecar-demo
+  labels:
+    app: aegis-sidecar-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aegis-sidecar-demo
+  template:
+    metadata:
+      labels:
+        app: aegis-sidecar-demo
+    spec:
+      containers:
+        - name: agent
+          image: python:3.12-slim
+          command: ["sleep", "infinity"]
+          env:
+            - name: HTTP_PROXY
+              value: "http://localhost:10000"
+            - name: HTTPS_PROXY
+              value: "http://localhost:10000"
+
+        - name: aegis-proxy
+          image: envoyproxy/envoy:v1.31-latest
+          args: ["-c", "/etc/envoy/envoy.yaml"]
+          ports:
+            - containerPort: 10000
+            - containerPort: 9901
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+
+        - name: opa
+          image: openpolicyagent/opa:latest-envoy
+          args:
+            - "run"
+            - "--server"
+            - "--config-file=/config/opa-config.yaml"
+            - "--addr=0.0.0.0:8181"
+            - "/policies"
+          ports:
+            - containerPort: 8181
+            - containerPort: 9191
+          volumeMounts:
+            - name: opa-config
+              mountPath: /config/opa-config.yaml
+              subPath: opa-config.yaml
+            - name: opa-policies
+              mountPath: /policies/default.rego
+              subPath: default.rego
+            - name: opa-policies
+              mountPath: /policies/policy/data.yaml
+              subPath: data.yaml
+
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: aegis-envoy-config
+        - name: opa-config
+          configMap:
+            name: aegis-opa-config
+        - name: opa-policies
+          configMap:
+            name: aegis-opa-policies

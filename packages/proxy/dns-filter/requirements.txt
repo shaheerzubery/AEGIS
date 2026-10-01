@@ -1,0 +1,4 @@
+# Isolated to this one service — for DNS wire-format parsing/building,
+# rather than hand-rolling it (security-sensitive parsing code should lean
+# on a well-tested library). Not added to any other service's image.
+dnspython>=2.6

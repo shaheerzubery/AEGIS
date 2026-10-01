@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AEGIS Audit Event (OCSF-aligned)",
+  "type": "object",
+  "required": ["event_id", "timestamp", "session_id", "event_type", "prev_hash", "hash"],
+  "properties": {
+    "event_id": { "type": "string", "description": "UUID for this event" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "session_id": { "type": "string", "description": "Agent session / containment zone this event belongs to" },
+    "event_type": {
+      "type": "string",
+      "enum": ["action_attempted", "policy_decision", "anomaly_score", "circuit_breaker_event", "policy_change"]
+    },
+    "action": {
+      "type": "object",
+      "properties": {
+        "action_type": { "type": "string" },
+        "target": { "type": "string" },
+        "method": { "type": "string" },
+        "parameters": { "type": "object" }
+      }
+    },
+    "policy_decision": {
+      "type": "object",
+      "properties": {
+        "allowed": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "policy_profile": { "type": "string" }
+      }
+    },
+    "anomaly_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "severity": { "type": "string", "enum": ["informational", "warning", "critical"] },
+    "prev_hash": { "type": "string", "description": "SHA-256 of the previous event in this chain" },
+    "hash": { "type": "string", "description": "SHA-256 of this event's canonical form + prev_hash" }
+  }
+}

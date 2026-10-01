@@ -1,0 +1,5 @@
+# Gap-closing work (2026-09-16, see PROGRESS.md): emergency_kill() needs
+# the real Docker Engine API to stop a registered agent container — the
+# stdlib has no client for that. Only this one function needs it; every
+# other endpoint in this service is still stdlib-only.
+docker>=7.0

@@ -1,0 +1,12 @@
+# Gap-closing work (2026-09-16, see PROGRESS.md): the trained sequence
+# classifier (train_classifier.py, model.joblib) needs scikit-learn to
+# load and run at serve time, not just to train — joblib.load() still
+# needs the library that defines the pickled estimator class. Pinned
+# exactly (not >=) to the version model.joblib was actually trained
+# with — scikit-learn's own docs warn a version mismatch between
+# pickling and unpickling "might lead to breaking code or invalid
+# results"; pinning removes that risk rather than hoping newer versions
+# stay compatible. Re-run train_classifier.py and bump this pin together
+# if you ever upgrade.
+scikit-learn==1.7.2
+joblib>=1.3

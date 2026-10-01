@@ -1,0 +1,20 @@
+# Exposes the Envoy admin/metrics port and OPA's data API within the
+# cluster — for observability tooling and for other AEGIS services (e.g. the
+# credential broker, which calls OPA's data API) to reach this Pod's OPA
+# sidecar if it's used as a shared policy point rather than one-per-agent.
+apiVersion: v1
+kind: Service
+metadata:
+  name: aegis-sidecar-demo
+  labels:
+    app: aegis-sidecar-demo
+spec:
+  selector:
+    app: aegis-sidecar-demo
+  ports:
+    - name: envoy-admin
+      port: 9901
+      targetPort: 9901
+    - name: opa-data-api
+      port: 8181
+      targetPort: 8181

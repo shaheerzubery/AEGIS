@@ -1,0 +1,19 @@
+[package]
+name = "circuit-breaker-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+dashmap = "6"
+# Gap-closing work (2026-09-16, see PROGRESS.md): emergency_kill needs the
+# real Docker Engine API — same role the Python service's `docker` PyPI
+# package plays there. The officially-recommended Docker client for Rust.
+bollard = "0.17"
+
+[profile.release]
+opt-level = 2

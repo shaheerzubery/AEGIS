@@ -1,0 +1,75 @@
+# AEGIS policy template — PCI-DSS v4.0-relevant posture.
+#
+# Same shape as packages/policy-engine/policy.example.yaml — apply exactly
+# the same way, no new mechanism:
+#   aegisctl policy apply --tenant <name> packages/compliance/templates/pci-dss.yaml
+#
+# Every field below is commented with the PCI-DSS requirement it maps to
+# — see ../PCI_DSS_MAPPING.md for the full rationale table AND its
+# disclaimer (this is a starting point for a QSA/compliance conversation,
+# not a certification).
+#
+# Tuned toward the "strict" end of this repo's SOC 2 templates, same
+# reasoning as hipaa.yaml — cardholder data exposure from an agent
+# misconfiguration is a materially different failure mode than a typical
+# SaaS confidentiality incident. Pair this with
+# packages/content-guardrail's Luhn-validated credit-card detection (on
+# by default, not something this file controls) for outbound PAN
+# screening — see ../PCI_DSS_MAPPING.md's scoping note.
+
+profile:
+  name: pci-dss
+  description: >
+    Minimal-privilege containment profile for agents that may touch
+    cardholder data — deny-by-default everywhere, narrow allowlists,
+    aggressive suspension on violation.
+
+allowed_actions:
+  - type: file_read
+    paths: ["/data/**"]
+
+denied_actions:
+  - type: shell_exec
+  - type: credential_access
+  - type: http_request
+    methods: [POST, PUT, DELETE]
+
+# PCI-DSS Req 1 — network security controls: deny-by-default egress with
+# a single explicit domain. Add real destinations one at a time.
+network:
+  default_action: deny
+  allowed_domains:
+    - example.com
+  denied_domains: []
+
+# PCI-DSS Req 7 — restrict access by business need to know. Empty by
+# default: add tools one at a time as a specific agent's task requires
+# them.
+allowed_tools: []
+
+# PCI-DSS Req 3 / Req 7 — protect stored account data, least privilege.
+# Even the credential broker's allowlist starts empty.
+allowed_credential_actions: {}
+
+# PCI-DSS Req 10 — logging/monitoring baselines. Deliberately tight
+# ceiling.
+rate_limits:
+  max_actions_per_minute: 20
+  max_data_volume_mb_per_session: 25
+
+# No operational-hours restriction by default — narrow this if the
+# deploying organization's own policy requires a defined window.
+time_constraints:
+  operational_hours: "00:00-23:59"
+
+# PCI-DSS Req 10 (monitoring) / incident response. Two violations (not
+# five) before automatic suspension; any self-modification attempt
+# escalates immediately regardless of this threshold (see
+# packages/anomaly-detector's self_modification rule).
+escalation:
+  on_denied_action: soft_pause
+  on_repeated_violations:
+    threshold: 2
+    window_seconds: 60
+    action: hard_suspend
+  on_self_modification_attempt: emergency_kill

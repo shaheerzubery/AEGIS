@@ -1,0 +1,36 @@
+# Renders the AEGIS sidecar (Envoy + OPA) alongside an agent container in
+# one Pod (proposal §4.5: "AEGIS deploys as a sidecar container in the same
+# pod as the agent"). ConfigMaps are generated directly from the real
+# proxy/policy-engine files, not duplicated — so this can never silently
+# drift from what the Docker Compose demo actually runs.
+#
+# Render: kubectl kustomize --load-restrictor LoadRestrictionsNone packages/proxy/k8s
+# (--load-restrictor is needed because this pulls files from outside its own
+# directory, e.g. ../../policy-engine — that's deliberate, so these ConfigMaps
+# can never drift from the real policy-engine/proxy files.)
+# --dry-run=client cannot validate offline: kubectl queries live API discovery
+# even for client-side dry-run, so it errors out with no cluster configured.
+# --dry-run=server or a real apply needs an actual cluster (e.g. `kind create
+# cluster` — that's how this manifest was actually verified, see PROGRESS.md).
+
+resources:
+  - deployment.yaml
+  - networkpolicy.yaml
+  - service.yaml
+
+configMapGenerator:
+  - name: aegis-envoy-config
+    files:
+      # NOT ../envoy.yaml — see envoy-k8s.yaml's own header comment for why
+      # the OPA cluster address must differ from the Docker Compose version.
+      - envoy.yaml=envoy-k8s.yaml
+  - name: aegis-opa-config
+    files:
+      - opa-config.yaml=../../policy-engine/opa-config.yaml
+  - name: aegis-opa-policies
+    files:
+      - default.rego=../../policy-engine/policies/default.rego
+      - data.yaml=../../policy-engine/policies/policy/data.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true

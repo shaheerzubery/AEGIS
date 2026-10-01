@@ -1,0 +1,325 @@
+# AEGIS demo stack (proposal §12, Days 6-7): agent + proxy + OPA + audit log + dashboard.
+# Bring up incrementally as each Day's task lands — most services are stubs until
+# their package is implemented (see ../PLAN.md).
+#
+# Config consolidation: the services built from this repo's own Python
+# (audit-logger, circuit-breaker, anomaly-detector, credential-vault,
+# dashboard-api, protected-api, dns-filter) get their settings from ../config.py,
+# bind-mounted read-only into each one below — NOT from environment: blocks
+# here. Edit ../config.py, then `docker compose restart <service>` (no
+# rebuild needed, since it's a mount, not baked into the image at build
+# time). See ../docs/configuration.md for the full picture, including two
+# things ../config.py genuinely can't reach: each service's *published*
+# port below (Compose's own job) must be kept in sync with config.py's
+# matching *_PORT constant by hand, and vault/audit-db (third-party images,
+# not Python) still take their credentials as literal environment: values
+# below, which must be kept in sync with config.py's VAULT_TOKEN and
+# PROTECTED_API_TOKEN_* by hand. circuit-breaker-rs (below) is the same
+# story as vault/audit-db in this respect — not Python, config.py
+# explicitly excludes it, literal environment: values instead.
+
+# Gap #2 (DNS-rebinding fix, see PROGRESS.md): dns-filter needs a static IP
+# so Envoy's resolver config (packages/proxy/envoy.yaml) can point at it
+# with a literal address — a DNS resolver config can't itself depend on
+# DNS to find its resolver. Overriding the implicit "default" network's
+# subnet (rather than defining a whole separate named network) means every
+# other service below is completely unaffected — still just implicitly
+# attached to "default" as before, only dns-filter gets an explicit
+# ipv4_address on it.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+services:
+  aegis-proxy:
+    build: ../packages/proxy
+    depends_on:
+      - opa
+      - dns-filter
+    ports:
+      - "10000:10000"
+      - "9901:9901"
+
+  dns-filter:
+    build: ../packages/proxy/dns-filter
+    volumes:
+      - ../config.py:/app/config.py:ro
+    networks:
+      default:
+        ipv4_address: 172.30.0.53
+
+  opa:
+    image: openpolicyagent/opa:latest-envoy
+    command: ["run", "--server", "--config-file=/config/opa-config.yaml", "--addr=0.0.0.0:8181", "/policies"]
+    volumes:
+      - ../packages/policy-engine/policies:/policies
+      - ../packages/policy-engine/opa-config.yaml:/config/opa-config.yaml
+    ports:
+      - "8181:8181"
+      - "9191:9191"
+
+  audit-db:
+    image: postgres:16
+    environment:
+      # Gap #3 (see ../PROGRESS.md): audit-logger can now use this backend
+      # (config.py's AUDIT_STORAGE_BACKEND = "postgres" to switch, "sqlite"
+      # is still the default). A third-party image, not Python — can't
+      # read ../config.py, so these stay as literals; keep them in sync
+      # with config.py's AUDIT_POSTGRES_* constants by hand.
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: aegis
+      POSTGRES_DB: aegis_audit
+    ports:
+      - "5432:5432"
+
+  mock-siem:
+    build: ./mock-siem
+    ports:
+      - "9800:9800"
+
+  # Gap-closing work (2026-09-16, see PROGRESS.md): stands in for a real
+  # Slack Incoming Webhook / email-relay endpoint, same role mock-siem
+  # plays for Layer 6's SIEM forwarding above.
+  mock-webhook:
+    build: ./mock-webhook
+    ports:
+      - "9850:9850"
+
+  audit-logger:
+    build: ../packages/audit-logger
+    depends_on:
+      - anomaly-detector
+      - mock-siem
+      - audit-db  # Gap #3: only actually used when config.py's AUDIT_STORAGE_BACKEND = "postgres"
+    volumes:
+      - ../config.py:/app/config.py:ro
+    ports:
+      - "9300:9300"  # keep in sync with ../config.py's AUDIT_LOGGER_PORT
+
+  # Gap-closing work (2026-09-16, see PROGRESS.md): circuit-breaker-rs below
+  # is now the DEFAULT (published on 9400, the port every host-side caller
+  # — aegisctl, demo/*.py scripts, an externally-run agent's AegisClient —
+  # already assumes via its AEGIS_CIRCUIT_BREAKER_URL fallback of
+  # http://localhost:9400). This service moves to 9410 instead, so it's
+  # still fully up and reachable, just no longer the implicit default.
+  # config.py's CIRCUIT_BREAKER_BACKEND controls which one *internal*
+  # (container-to-container) callers use; set it to "python" to point back
+  # at this service without touching this file.
+  circuit-breaker:
+    build: ../packages/circuit-breaker
+    depends_on:
+      - mock-webhook
+    volumes:
+      - ../config.py:/app/config.py:ro
+      # Gap-closing work (2026-09-16, see PROGRESS.md): emergency_kill()
+      # needs real Docker Engine API access to stop a registered agent
+      # container. Mounting the host's Docker socket into a container
+      # gives that container FULL control of the host's Docker daemon —
+      # equivalent to root on the host, not a narrowly-scoped capability.
+      # Demo-only, same category of caveat as Vault's dev-mode root token
+      # elsewhere in this file: a real deployment should front this with a
+      # narrowly-scoped agent-lifecycle API (or the orchestrator's own
+      # RBAC-scoped API — e.g. the Kubernetes API server with a Role
+      # limited to pod delete in one namespace), never a raw socket mount.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "9410:9400"
+
+  # Rust rewrite (see PROGRESS.md's gap-closing backlog). Not
+  # config.py-driven: it's not one of this repo's Python services, so
+  # config.py's own module docstring explicitly excludes it — settings
+  # come from these literal environment: values instead (same pattern as
+  # vault/audit-db), matching circuit-breaker's config.py values by hand.
+  # Published on 9400 — see the comment on circuit-breaker above for why.
+  circuit-breaker-rs:
+    build: ../packages/circuit-breaker-rs
+    depends_on:
+      - mock-webhook
+    environment:
+      AEGIS_CIRCUIT_BREAKER_PORT: "9400"
+      AEGIS_POLICY_URL: http://opa:8181
+      AEGIS_VIOLATION_THRESHOLD: "5"
+      AEGIS_VIOLATION_WINDOW_SECONDS: "60"
+      AEGIS_RATE_LIMIT_WINDOW_SECONDS: "60"
+      AEGIS_RATE_LIMIT_PER_MINUTE: "60"
+      AEGIS_RATE_LIMIT_CACHE_SECONDS: "30"
+      # Gap-closing work (2026-09-16, see PROGRESS.md): keep in sync with
+      # config.py's WEBHOOK_URL by hand — same reasoning as this service's
+      # other literals (see the comment above circuit-breaker's build).
+      AEGIS_WEBHOOK_URL: http://mock-webhook:9850/notify
+      # Gap-closing work (2026-09-16, see PROGRESS.md): hard_suspend's real
+      # forensic snapshot fetches this session's audit trail live.
+      AEGIS_AUDIT_URL: http://audit-logger:9300
+    volumes:
+      # Gap-closing work (2026-09-16, see PROGRESS.md): tier parity with
+      # circuit-breaker's emergency_kill — same meaningful privilege grant
+      # documented on that service's socket mount above (full host
+      # Docker-daemon control, not scoped), demo-only for the same reason.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "9400:9400"
+
+  anomaly-detector:
+    build: ../packages/anomaly-detector
+    depends_on:
+      - circuit-breaker
+      - circuit-breaker-rs  # default backend per config.py's CIRCUIT_BREAKER_BACKEND
+    volumes:
+      - ../config.py:/app/config.py:ro
+    ports:
+      - "9700:9700"  # keep in sync with ../config.py's ANOMALY_DETECTOR_PORT
+
+  # Content guardrails — added directly, not from the proposal's own
+  # roadmap (see PLAN.md's "Also done, requested directly" section).
+  # Checks the actual TEXT flowing to/from the LLM (PII, prompt
+  # injection, toxic output) rather than actions/network/credentials,
+  # which is what the proposal's six layers govern.
+  content-guardrail:
+    build: ../packages/content-guardrail
+    depends_on:
+      - audit-logger
+      - circuit-breaker
+      - circuit-breaker-rs
+    volumes:
+      - ../config.py:/app/config.py:ro
+    ports:
+      - "9200:9200"  # keep in sync with ../config.py's CONTENT_GUARDRAIL_PORT
+
+  vault:
+    image: hashicorp/vault:1.17
+    cap_add:
+      - IPC_LOCK
+    environment:
+      # Dev-mode Vault — NOT how a real deployment would run this. A
+      # third-party image, not Python — can't read ../config.py, so this
+      # stays a literal; keep it in sync with config.py's VAULT_TOKEN.
+      # Pointing at a real Vault instead means setting VAULT_ADDR/
+      # VAULT_TOKEN in ../config.py and removing this service and
+      # vault-init from this file entirely — see ../docs/configuration.md.
+      VAULT_DEV_ROOT_TOKEN_ID: aegis-dev-root
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "8200:8200"
+
+  vault-init:
+    image: hashicorp/vault:1.17
+    depends_on:
+      - vault
+    environment:
+      # Third-party image, not Python — can't read ../config.py. Keep in
+      # sync with config.py's VAULT_TOKEN and PROTECTED_API_TOKEN_* by hand.
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: aegis-dev-root
+    volumes:
+      # Gap-closing work (2026-09-16, see PROGRESS.md): this is the ONE
+      # place the root token above is used to bootstrap something
+      # credential-vault will use instead of it — a real Vault operator
+      # setup works the same way (root/a highly-privileged token bootstraps
+      # AppRole/Kubernetes-auth/etc. once, then every workload uses that
+      # instead). role_id/secret_id are generated fresh by Vault itself at
+      # every startup (Vault dev-mode is in-memory, so there's nothing to
+      # persist across restarts) and written here for credential-vault to
+      # read — this volume is the hand-off, not a config.py concern (the
+      # values don't exist until this container runs).
+      - vault-approle-data:/vault-approle
+    entrypoint:
+      - sh
+      - -c
+      # Sprint 4: one secret per tenant, at a tenant-scoped path
+      # (secret/data/<tenant_id>/protected-api) — see
+      # packages/credential-vault/credential_broker.py's SERVICES template.
+      # Demo credentials — replace both before any real deployment (see
+      # ../docs/configuration.md's checklist).
+      #
+      # Gap-closing work (2026-09-16, see PROGRESS.md): also bootstraps an
+      # AppRole identity scoped to exactly what credential-vault needs
+      # (mint child tokens, manage its own tenant policies) — nothing
+      # else. This is the root token's ONLY remaining job anywhere in this
+      # repo's own Python services; credential-vault never sees it again
+      # after this.
+      # Folded YAML scalar (>) joins these into one shell line — a
+      # heredoc wouldn't survive that folding (its terminator needs an
+      # exact, unindented line match), so the policy body is written via
+      # printf instead.
+      - >
+        sleep 3 &&
+        vault kv put secret/default/protected-api token=super-secret-demo-token-default &&
+        vault kv put secret/tenant-acme/protected-api token=super-secret-demo-token-acme &&
+        vault auth enable approle || true &&
+        printf 'path "auth/token/create" {\n  capabilities = ["update", "sudo"]\n}\npath "sys/policies/acl/aegis-tenant-*" {\n  capabilities = ["create", "update", "read"]\n}\n' | vault policy write aegis-credential-broker-admin - &&
+        vault write auth/approle/role/aegis-credential-broker token_policies="aegis-credential-broker-admin" token_ttl=5m token_max_ttl=1h &&
+        vault read -field=role_id auth/approle/role/aegis-credential-broker/role-id > /vault-approle/role_id &&
+        vault write -field=secret_id -f auth/approle/role/aegis-credential-broker/secret-id > /vault-approle/secret_id &&
+        echo "AppRole credentials written to /vault-approle"
+    restart: "no"
+
+  protected-api:
+    build: ../demo/protected-api
+    volumes:
+      - ../config.py:/app/config.py:ro
+    ports:
+      - "9500:9500"  # keep in sync with ../config.py's PROTECTED_API_PORT
+
+  credential-vault:
+    build: ../packages/credential-vault
+    depends_on:
+      vault:
+        condition: service_started
+      opa:
+        condition: service_started
+      protected-api:
+        condition: service_started
+      # Gap-closing work (2026-09-16, see PROGRESS.md): service_started
+      # (this file's default elsewhere) isn't enough for vault-init
+      # specifically — it's a one-shot init container, and "started"
+      # doesn't mean "finished writing the AppRole role_id/secret_id
+      # credential_broker.py needs." condition:
+      # service_completed_successfully waits for it to actually exit 0
+      # first. credential_broker.py's own retry loop is defense in depth
+      # on top of this, not a substitute for it.
+      vault-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../config.py:/app/config.py:ro
+      - vault-approle-data:/vault-approle:ro
+    ports:
+      - "9600:9600"  # keep in sync with ../config.py's CREDENTIAL_VAULT_PORT
+
+  dashboard-api:
+    build:
+      context: ..
+      dockerfile: packages/dashboard/api/Dockerfile
+    depends_on:
+      - opa
+      - audit-logger
+      - circuit-breaker
+      - circuit-breaker-rs  # default backend per config.py's CIRCUIT_BREAKER_BACKEND
+      - anomaly-detector
+      - credential-vault
+    volumes:
+      - ../config.py:/app/config.py:ro
+    ports:
+      - "9900:9900"  # keep in sync with ../config.py's DASHBOARD_API_PORT
+
+  hello-agent:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        RUN pip install httpx
+        COPY hello_agent.py /app/hello_agent.py
+        CMD ["python", "/app/hello_agent.py"]
+    depends_on:
+      - aegis-proxy
+    environment:
+      HTTP_PROXY: http://aegis-proxy:10000
+      HTTPS_PROXY: http://aegis-proxy:10000
+
+# Gap-closing work (2026-09-16, see PROGRESS.md): the hand-off point for
+# vault-init's AppRole bootstrap — see that service's own comments. Not a
+# config.py concern (the values are generated fresh by Vault at every
+# startup, not a demo-to-real-world literal).
+volumes:
+  vault-approle-data:

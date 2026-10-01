@@ -1,0 +1,96 @@
+# AEGIS egress proxy — Day 3: every request's allow/deny decision comes from
+# the OPA sidecar (packages/policy-engine) via Envoy's ext_authz filter,
+# instead of the hardcoded RBAC list used on Day 2 (see ../../PLAN.md).
+#
+# Gap #2 (DNS-rebinding fix, see ../../PROGRESS.md): OPA's ext_authz check
+# above only ever sees a hostname string — dynamic_forward_proxy below
+# resolves DNS and connects *after* that decision, so nothing validated the
+# resolved IP (confirmed live: an allowlisted domain pointed at an internal
+# address, and Envoy genuinely tried to connect there). Both
+# dns_cache_config blocks below now point their resolver at
+# packages/proxy/dns-filter (a static 172.30.0.53, see
+# ../../demo/docker-compose.yml's networks section) instead of the
+# container's default resolver — it forwards to a real upstream but refuses
+# any answer containing a private/loopback/link-local address before Envoy
+# ever gets it, so no connection to that address is ever attempted.
+
+static_resources:
+  listeners:
+    - name: egress_listener
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 10000 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: aegis_egress
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: allow_all_passthrough
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route: { cluster: dynamic_forward_proxy_cluster }
+                http_filters:
+                  - name: envoy.filters.http.ext_authz
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      transport_api_version: V3
+                      failure_mode_allow: false
+                      grpc_service:
+                        envoy_grpc:
+                          cluster_name: opa_cluster
+                        timeout: 0.5s
+                  - name: envoy.filters.http.dynamic_forward_proxy
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
+                      dns_cache_config: &dns_cache_config
+                        name: dynamic_forward_proxy_cache_config
+                        dns_lookup_family: V4_ONLY
+                        typed_dns_resolver_config:
+                          name: envoy.network.dns_resolver.cares
+                          typed_config:
+                            "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.cares.v3.CaresDnsResolverConfig
+                            resolvers:
+                              - socket_address: { address: 172.30.0.53, port_value: 53 }
+                            use_resolvers_as_fallback: false
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: dynamic_forward_proxy_cluster
+      lb_policy: CLUSTER_PROVIDED
+      cluster_type:
+        name: envoy.clusters.dynamic_forward_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+          # YAML alias, not a copy — Envoy requires the filter's and the
+          # cluster's dns_cache_config to be byte-identical (they share one
+          # named cache); an alias makes that a structural guarantee
+          # instead of two blocks that have to be kept in sync by hand.
+          dns_cache_config: *dns_cache_config
+    - name: opa_cluster
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: opa_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: opa, port_value: 9191 }
+
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }

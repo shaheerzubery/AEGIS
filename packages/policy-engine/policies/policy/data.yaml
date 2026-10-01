@@ -1,0 +1,56 @@
+# OPA data bootstrap seed — loaded automatically at container startup because
+# it's a data file (not a .rego file) inside the "policy" subdirectory of the
+# mounted /policies root, so OPA merges its content under `data.policy.*`.
+#
+# This must stay in sync with the per-tenant example files in this directory
+# (../../policy.example.yaml for "default", ../../policy.tenant-acme.example.yaml
+# for "tenant-acme") by hand at build time. At runtime, `aegisctl policy apply
+# --tenant <name> <file>` overwrites data.policy.tenants.<name> live via OPA's
+# data API (PUT /v1/data/policy/tenants/<name>) — no restart needed. If the two
+# drift, the live PUT wins until the next container restart re-seeds from here.
+#
+# Sprint 4: policy data is now namespaced per tenant under `tenants.<tenant_id>`
+# (see ../default.rego) instead of one flat global document. An unrecognized
+# tenant_id resolves to an undefined subtree in Rego, which fails closed
+# (denied) rather than silently falling back to "default"'s policy.
+
+tenants:
+  default:
+    network:
+      allowed_domains:
+        - example.com
+
+    allowed_tools:
+      - read_file
+
+    allowed_credential_actions:
+      protected-api:
+        - profile
+
+    rate_limits:
+      max_actions_per_minute: 60
+
+    time_constraints:
+      operational_hours: "00:00-23:59"
+
+  # Second demo tenant, deliberately configured differently from "default" so
+  # isolation between tenants is demonstrable out of the box (different
+  # allowed domain, an extra tool, and a tighter rate limit).
+  tenant-acme:
+    network:
+      allowed_domains:
+        - acme.example
+
+    allowed_tools:
+      - read_file
+      - send_email
+
+    allowed_credential_actions:
+      protected-api:
+        - profile
+
+    rate_limits:
+      max_actions_per_minute: 30
+
+    time_constraints:
+      operational_hours: "00:00-23:59"

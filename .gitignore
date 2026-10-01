@@ -1,0 +1,28 @@
+# config.py IS committed and IS the real settings file for this repo's own
+# services (see docs/configuration.md) — nothing to ignore there.
+#
+# packages/dashboard's Vite frontend still has its own small .env (Vite
+# can't read Python) — ignore a locally-edited copy of it.
+packages/dashboard/.env
+
+node_modules/
+dist/
+__pycache__/
+*.pyc
+
+# Locally-built binaries
+packages/cli/aegisctl
+packages/cli/aegisctl.exe
+
+# Generated SOC 2 evidence reports (packages/compliance/soc2_report.py) —
+# a fresh run's output, not a repo artifact.
+packages/compliance/soc2_report_*.pdf
+packages/compliance/soc2_report_*.md
+packages/compliance/soc2_report_*.json
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/

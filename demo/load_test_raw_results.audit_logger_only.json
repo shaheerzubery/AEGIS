@@ -1,0 +1,44 @@
+[
+  {
+    "concurrency": 25,
+    "duration": 10.110000000000127,
+    "total_requests": 1831,
+    "throughput_rps": 181.10781404549724,
+    "mean_ms": 128.82086291643864,
+    "p50_ms": 125.0,
+    "p95_ms": 172.00000000002547,
+    "p99_ms": 233.9999999999236,
+    "error_count": 0,
+    "client_side_error_count": 0,
+    "correctness_mismatches": 0,
+    "aborted": false
+  },
+  {
+    "concurrency": 100,
+    "duration": 10.717999999999847,
+    "total_requests": 2116,
+    "throughput_rps": 197.42489270386548,
+    "mean_ms": 462.26701323251575,
+    "p50_ms": 327.99999999997453,
+    "p95_ms": 422.00000000002547,
+    "p99_ms": 5139.999999999873,
+    "error_count": 35,
+    "client_side_error_count": 0,
+    "correctness_mismatches": 0,
+    "aborted": false
+  },
+  {
+    "concurrency": 500,
+    "duration": 17.047000000000025,
+    "total_requests": 1843,
+    "throughput_rps": 108.11286443362452,
+    "mean_ms": 3127.6104177970697,
+    "p50_ms": 2327.9999999999745,
+    "p95_ms": 6594.000000000051,
+    "p99_ms": 8969.000000000051,
+    "error_count": 531,
+    "client_side_error_count": 0,
+    "correctness_mismatches": 0,
+    "aborted": true
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "protected-api": {
+    "base_url": "${PROTECTED_API_URL:-http://protected-api:9500}",
+    "vault_path_template": "secret/data/{tenant_id}/protected-api",
+    "vault_field": "token"
+  }
+}
