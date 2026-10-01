@@ -59,3 +59,23 @@ class GuardedToolExecutor:
                     "status": "error",
                 }})
         return {"role": "user", "content": results} if results else None
+
+
+def record_call(client: AegisClient, response: dict, model_id: str, prompt: str | None = None,
+                latency_ms: float | None = None, enforce: bool = False) -> dict:
+    """Record a Bedrock `converse()` response via AegisClient.record_llm_call().
+    Tokens come from `response["usage"]`; latency defaults to Bedrock's own
+    `response["metrics"]["latencyMs"]` when the caller didn't measure it."""
+    usage = response.get("usage", {})
+    blocks = response.get("output", {}).get("message", {}).get("content", [])
+    text = "".join(b.get("text", "") for b in blocks) or None
+    return client.record_llm_call(
+        model=model_id,
+        provider="bedrock",
+        input_tokens=usage.get("inputTokens"),
+        output_tokens=usage.get("outputTokens"),
+        latency_ms=latency_ms if latency_ms is not None else response.get("metrics", {}).get("latencyMs"),
+        prompt=prompt,
+        response=text,
+        enforce=enforce,
+    )

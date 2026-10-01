@@ -30,3 +30,25 @@ class GuardedToolExecutor:
         self._client.check(action)  # raises PolicyDenied if not allowed
         tool_fn = self._tools[tool_call.function.name]
         return tool_fn(**args)
+
+
+def record_call(client: AegisClient, response, prompt: str | None = None,
+                latency_ms: float | None = None, enforce: bool = False) -> dict:
+    """Record an OpenAI chat-completions response (tokens from `.usage`, reply
+    text from the first choice) via AegisClient.record_llm_call()."""
+    usage = getattr(response, "usage", None)
+    text = None
+    try:
+        text = response.choices[0].message.content
+    except (AttributeError, IndexError):
+        pass
+    return client.record_llm_call(
+        model=getattr(response, "model", "unknown"),
+        provider="openai",
+        input_tokens=getattr(usage, "prompt_tokens", None),
+        output_tokens=getattr(usage, "completion_tokens", None),
+        latency_ms=latency_ms,
+        prompt=prompt,
+        response=text,
+        enforce=enforce,
+    )

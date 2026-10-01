@@ -9,7 +9,7 @@
     "session_id": { "type": "string", "description": "Agent session / containment zone this event belongs to" },
     "event_type": {
       "type": "string",
-      "enum": ["action_attempted", "policy_decision", "anomaly_score", "circuit_breaker_event", "policy_change"]
+      "enum": ["action_attempted", "policy_decision", "llm_call", "content_guardrail_decision", "anomaly_score", "circuit_breaker_event", "policy_change"]
     },
     "action": {
       "type": "object",

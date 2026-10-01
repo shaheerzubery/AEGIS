@@ -16,7 +16,9 @@ explicit constructor argument always wins over the environment variable,
 which in turn wins over the "localhost" default — see _url_default().
 """
 
+import hashlib
 import os
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -116,7 +118,14 @@ class AegisClient:
         content_guardrail_url: str | None = None,
         session_id: str | None = None,
         tenant_id: str = "default",
+        pricing: dict[str, tuple[float, float]] | None = None,
     ):
+        # pricing: optional {model_id: (usd_per_1M_input_tokens,
+        # usd_per_1M_output_tokens)} used by record_llm_call() to compute
+        # cost. Deliberately caller-supplied: prices change and differ by
+        # contract, so none are hardcoded. Omit it and cost_usd is simply
+        # not reported.
+        self.pricing = pricing or {}
         # None (the default) falls back to the environment, which in turn
         # falls back to "localhost" — resolved here, not as a function
         # default, so each construction picks up whatever's in the
@@ -202,6 +211,110 @@ class AegisClient:
 
         if body.get("blocked"):
             raise ContentDenied(direction, body.get("categories", []))
+
+    def timed(self) -> "Stopwatch":
+        """`with client.timed() as t: resp = llm(...)`, then pass
+        latency_ms=t.ms to record_llm_call()."""
+        return Stopwatch()
+
+    def record_llm_call(
+        self,
+        model: str,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        latency_ms: float | None = None,
+        prompt: str | None = None,
+        response: str | None = None,
+        provider: str | None = None,
+        cost_usd: float | None = None,
+        enforce: bool = False,
+    ) -> dict:
+        """Record one LLM round trip in the audit log as an `llm_call` event:
+        token counts, latency, cost, and (if prompt/response text is given)
+        a content-guardrail verdict for each (PII, prompt injection, toxic).
+
+        The verdict is recorded for EVERY scanned call, clean or not
+        (content-guardrail itself only logs the blocked ones), so the audit
+        trail answers both "was this session ever injected?" and "how many
+        calls were checked at all?". Raw text is never stored: only its
+        SHA-256, length, and the guardrail's category/type verdicts, so a
+        flagged call can be matched back to the original text by whoever
+        holds it without the audit log becoming a prompt archive.
+
+        Returns the recorded summary. With enforce=True, raises ContentDenied
+        when the prompt or response is flagged (after recording it). Like the
+        other non-policy calls here, an unreachable guardrail or audit logger
+        never raises."""
+        content = {}
+        flagged_by = None
+        for direction, text in (("input", prompt), ("output", response)):
+            if text is None:
+                continue
+            verdict = self._scan(text, direction)
+            entry = {
+                "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                "chars": len(text),
+                "scanned": verdict is not None,
+                "flagged": bool(verdict and verdict.get("blocked")),
+                "categories": (verdict or {}).get("categories", []),
+                "types": sorted({m["type"] for m in (verdict or {}).get("matches", []) if m.get("type")}),
+            }
+            content[direction] = entry
+            if entry["flagged"] and flagged_by is None:
+                flagged_by = (direction, entry["categories"])
+
+        if cost_usd is None and model in self.pricing and input_tokens is not None and output_tokens is not None:
+            price_in, price_out = self.pricing[model]
+            cost_usd = (input_tokens * price_in + output_tokens * price_out) / 1_000_000
+
+        total = None
+        if input_tokens is not None or output_tokens is not None:
+            total = (input_tokens or 0) + (output_tokens or 0)
+
+        summary = {
+            "provider": provider,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total,
+            "latency_ms": latency_ms,
+            "cost_usd": cost_usd,
+            "content": content,
+            "prompt_injection_suspected": "prompt_injection" in content.get("input", {}).get("categories", []),
+        }
+        try:
+            self._audit.post(
+                "/events",
+                json={
+                    "tenant_id": self.tenant_id,
+                    "session_id": self.session_id,
+                    "event_type": "llm_call",
+                    "severity": "warning" if flagged_by else "informational",
+                    "llm": summary,
+                },
+            )
+        except httpx.HTTPError:
+            pass  # best-effort, same as _log_event
+
+        if enforce and flagged_by:
+            raise ContentDenied(*flagged_by)
+        return summary
+
+    def _scan(self, text: str, direction: str) -> dict | None:
+        try:
+            response = self._content_guardrail.post(
+                "/check",
+                json={
+                    "tenant_id": self.tenant_id,
+                    "session_id": self.session_id,
+                    "direction": direction,
+                    "text": text,
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError:
+            return None  # guardrail unreachable: recorded as scanned=False
 
     def register_runtime(self, container_id: str | None = None) -> bool:
         """Gap-closing work (2026-09-16, see PROGRESS.md): opts this
@@ -300,6 +413,20 @@ class AegisClient:
             )
         except httpx.HTTPError:
             pass  # best-effort; audit-logger being down shouldn't block the agent
+
+
+class Stopwatch:
+    """Context manager measuring wall-clock milliseconds in `.ms`."""
+
+    ms: float = 0.0
+
+    def __enter__(self):
+        self._start = time.perf_counter()
+        return self
+
+    def __exit__(self, *exc):
+        self.ms = (time.perf_counter() - self._start) * 1000
+        return False
 
 
 def guard(client: AegisClient, action: ActionDescriptor):
