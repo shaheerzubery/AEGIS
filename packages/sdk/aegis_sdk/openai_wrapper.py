@@ -3,6 +3,8 @@
 Day 4 skeleton (proposal §4.4, P0 launch framework).
 """
 
+import json
+
 from . import ActionDescriptor, AegisClient, PolicyDenied
 
 
@@ -15,11 +17,16 @@ class GuardedToolExecutor:
         self._tools = tools_by_name
 
     def execute(self, tool_call):
+        # The real OpenAI API returns arguments as a JSON string; accept a
+        # pre-parsed dict too.
+        args = tool_call.function.arguments
+        if isinstance(args, str):
+            args = json.loads(args) if args.strip() else {}
         action = ActionDescriptor(
             action_type="tool_call",
             target=tool_call.function.name,
-            parameters=tool_call.function.arguments,
+            parameters=args,
         )
         self._client.check(action)  # raises PolicyDenied if not allowed
         tool_fn = self._tools[tool_call.function.name]
-        return tool_fn(**tool_call.function.arguments)
+        return tool_fn(**args)

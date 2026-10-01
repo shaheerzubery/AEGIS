@@ -10,6 +10,7 @@ Day 4 target frameworks: OpenAI Agents SDK, Anthropic tool use, LangChain/LangGr
 - `aegis_sdk/__init__.py` — public API (`guard()`, `AegisClient`)
 - `aegis_sdk/openai_wrapper.py` — wraps OpenAI tool-calling
 - `aegis_sdk/anthropic_wrapper.py` — wraps Anthropic tool use
+- `aegis_sdk/bedrock_wrapper.py` — wraps AWS Bedrock Converse tool use
 - `aegis_sdk/langchain_wrapper.py` — LangChain callback handler / tool wrapper
 
 ## Install

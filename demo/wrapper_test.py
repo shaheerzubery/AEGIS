@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "packages" / "sdk"))
 from aegis_sdk import AegisClient, PolicyDenied  # noqa: E402
 from aegis_sdk.openai_wrapper import GuardedToolExecutor as OpenAIExecutor  # noqa: E402
 from aegis_sdk.anthropic_wrapper import GuardedToolExecutor as AnthropicExecutor  # noqa: E402
+from aegis_sdk.bedrock_wrapper import GuardedToolExecutor as BedrockExecutor  # noqa: E402
 from aegis_sdk.langchain_wrapper import AegisCallbackHandler  # noqa: E402
 
 
@@ -44,6 +45,15 @@ def test_anthropic(client):
         print(f"Anthropic wrapper: DENIED -> {exc.reason}")
 
 
+def test_bedrock(client):
+    response = {"output": {"message": {"role": "assistant", "content": [
+        {"toolUse": {"toolUseId": "t1", "name": "read_file", "input": {"path": "/etc/hosts"}}}]}}}
+    executor = BedrockExecutor(client, TOOLS)
+    reply = executor.run_converse_tools(response)
+    result = reply["content"][0]["toolResult"]
+    print(f"Bedrock wrapper: {'DENIED' if result.get('status') == 'error' else 'ALLOWED'} -> {result['content']}")
+
+
 def test_langchain(client):
     handler = AegisCallbackHandler(client)
     try:
@@ -57,6 +67,7 @@ def main():
     client = AegisClient(policy_engine_url="http://localhost:8181")
     test_openai(client)
     test_anthropic(client)
+    test_bedrock(client)
     test_langchain(client)
 
 
