@@ -16,9 +16,9 @@ Day 4 target frameworks: OpenAI Agents SDK, Anthropic tool use, LangChain/LangGr
 
 Early testers install straight from Git (no package index yet):
 ```
-pip install "git+<REPO_URL>#subdirectory=packages/sdk"
+pip install "git+https://github.com/shaheerzubery/AEGIS.git#subdirectory=packages/sdk"
 # with a framework extra:
-pip install "git+<REPO_URL>#subdirectory=packages/sdk[openai]"   # or [anthropic], [langchain]
+pip install "git+https://github.com/shaheerzubery/AEGIS.git#subdirectory=packages/sdk[openai]"   # or [anthropic], [langchain]
 ```
 Pin a release with `@<tag>` before `#subdirectory`. From a local checkout:
 `pip install ./packages/sdk`.
