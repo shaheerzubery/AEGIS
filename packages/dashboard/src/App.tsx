@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
-import { api, ApiError, type AuditEvent, type LlmSummary, type ServiceStatus, type SuspendedSession } from "./api";
+import { Fragment, useEffect, useState } from "react";
+import { Badge, describeEvent, fmtTime } from "./events";
+import { LlmCharts, OverviewTab } from "./overview";
+import { api, ApiError, type AnomalyScore, type AuditEvent, type LlmCall, type LlmSummary, type ServiceStatus, type SuspendedSession } from "./api";
 import "./app.css";
 
-type Tab = "check" | "credential" | "approvals" | "audit" | "llm";
+type Tab = "overview" | "check" | "credential" | "approvals" | "audit" | "llm";
 
 const API_KEY_STORAGE_KEY = "aegis-dashboard-api-key";
 
@@ -63,20 +65,21 @@ function useDashboardStatus(apiKey: string): { status: ServiceStatus | null; err
 }
 
 function StatusBar({ status, error }: { status: ServiceStatus | null; error: string | null }) {
-  if (error) return <div className="statusbar status-down">{error}</div>;
-  if (!status) return <div className="statusbar">service status unavailable</div>;
+  if (error) return <div className="pills"><span className="pill warn"><span className="dot down" />{error}</span></div>;
+  if (!status) return <div className="pills"><span className="pill">service status unavailable</span></div>;
 
   return (
-    <div className="statusbar">
-      <span className="status-up">authenticated as tenant: {String(status.tenant_id)}</span>
-      <span className="status-up">
-        operator: {String(status.operator)} (role: {String(status.role)})
+    <div className="pills">
+      <span className="pill">tenant: {String(status.tenant_id)}</span>
+      <span className="pill">
+        {String(status.operator)} · {String(status.role)}
       </span>
       {Object.entries(status)
         .filter(([name]) => !STATUS_META_FIELDS.includes(name))
         .map(([name, up]) => (
-          <span key={name} className={up ? "status-up" : "status-down"}>
-            {name}: {up ? "up" : "down"}
+          <span key={name} className="pill" title={`${name}: ${up ? "up" : "down"}`}>
+            <span className={`dot ${up ? "up" : "down"}`} />
+            {name.replace(/_/g, " ")}
           </span>
         ))}
     </div>
@@ -171,11 +174,125 @@ function CredentialTab({ apiKey, sessionId, isOperator }: { apiKey: string; sess
   );
 }
 
+// Plain-language meaning of each flag the anomaly detector can raise (see
+// packages/anomaly-detector and config.py's *_THRESHOLD values).
+const FLAG_MEANING: Record<string, string> = {
+  self_modification: "the session touched its own code, config or policy (always critical)",
+  privilege_escalation: "several different kinds of action were denied, probing for something that works",
+  lateral_movement: "the session reached for many different targets in a short time",
+  reconnaissance: "many file reads in a short time, mapping what is available",
+  ml_anomaly: "the trained classifier rated the overall pattern as risky, though no single rule threshold was crossed",
+};
+
+// Evidence for a reviewer before approving/denying: the detector's current
+// score and flags, and the session's own audit trail (the permanent record).
+// The score only covers the detector's recent window (config.py's
+// ANOMALY_WINDOW_SECONDS), so for an older suspension it can read low or
+// empty while the timeline below still shows exactly what happened.
+function SessionEvidence({ apiKey, sessionId }: { apiKey: string; sessionId: string }) {
+  const [score, setScore] = useState<AnomalyScore | null>(null);
+  const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.anomalyScore(apiKey, sessionId).then(setScore).catch(() => setScore(null));
+    api
+      .events(apiKey, 100, sessionId)
+      .then(setEvents)
+      .catch((err) => setError(errorMessage(err)));
+  }, [apiKey, sessionId]);
+
+  const rows = events.map((e) => ({ e, d: describeEvent(e) }));
+  const blocked = rows.filter((r) => r.d.decision === "BLOCKED").length;
+  const allowed = rows.filter((r) => r.d.decision === "ALLOWED").length;
+  const distinctBlocked = new Set(rows.filter((r) => r.d.decision === "BLOCKED").map((r) => r.d.what)).size;
+
+  return (
+    <div>
+      <strong>Why it was suspended</strong>
+      {score ? (
+        <div>
+          <div className="statusbar">
+            <span className={score.severity === "critical" ? "status-down" : ""}>
+              anomaly score: {score.score.toFixed(2)} ({score.severity})
+            </span>
+            <span>actions in window: {score.actions_in_window}</span>
+            <span>
+              history: {allowed} allowed, {blocked} blocked ({distinctBlocked} distinct blocked actions)
+            </span>
+          </div>
+          {score.flags.length === 0 ? (
+            <p className="hint">
+              No flags in the detector's current window (it only looks at the last couple of minutes). Use the
+              timeline below.
+            </p>
+          ) : (
+            <ul>
+              {score.flags.map((f) => (
+                <li key={f}>
+                  <code>{f}</code>: {FLAG_MEANING[f] ?? "see detector documentation"}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
+        <p className="hint">Anomaly detector unavailable; showing the audit trail only.</p>
+      )}
+      {error && <div className="result bad">{error}</div>}
+      <strong>What the session did (newest first)</strong>
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Type</th>
+            <th>Decision</th>
+            <th>What</th>
+            <th>Why / details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={5}>No audit events for this session.</td>
+            </tr>
+          )}
+          {rows.map(({ e, d }) => (
+            <tr key={e.event_id}>
+              <td>{fmtTime(e.timestamp)}</td>
+              <td>{d.label}</td>
+              <td>
+                <Badge decision={d.decision} />
+              </td>
+              <td>{d.what}</td>
+              <td>{d.why}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ApprovalsTab({ apiKey, isOperator }: { apiKey: string; isOperator: boolean }) {
   const [suspended, setSuspended] = useState<SuspendedSession[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = () => api.suspended(apiKey).then(setSuspended).catch((err) => setError(errorMessage(err)));
+  const refresh = () =>
+    api
+      .suspended(apiKey)
+      .then((s) => {
+        setSuspended(s);
+        setError(null);
+      })
+      .catch((err) => setError(errorMessage(err)));
+  // Approve/Deny: surface a failure instead of silently dropping it, and
+  // refresh the queue either way so the table never shows stale state.
+  const decide = (action: "resume" | "deny", sessionId: string) =>
+    api[action](apiKey, sessionId)
+      .then(() => setError(null))
+      .catch((err) => setError(`${action} failed: ${errorMessage(err)}`))
+      .then(refresh);
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -207,21 +324,32 @@ function ApprovalsTab({ apiKey, isOperator }: { apiKey: string; isOperator: bool
             </tr>
           )}
           {suspended.map((s) => (
-            <tr key={s.session_id}>
-              <td>{s.session_id}</td>
-              <td>{s.reason}</td>
-              <td>{s.terminated ? "TERMINATED" : "SUSPENDED"}</td>
-              {isOperator && (
-                <td>
-                  {!s.terminated && (
-                    <>
-                      <button onClick={() => api.resume(apiKey, s.session_id).then(refresh)}>Approve</button>
-                      <button onClick={() => api.deny(apiKey, s.session_id).then(refresh)}>Deny</button>
-                    </>
-                  )}
+            <Fragment key={s.session_id}>
+              <tr>
+                <td>{s.session_id}</td>
+                <td>{s.reason}</td>
+                <td>{s.terminated ? "TERMINATED" : "SUSPENDED"}</td>
+                {isOperator && (
+                  <td>
+                    {!s.terminated && (
+                      <>
+                        <button className="btn-approve" onClick={() => decide("resume", s.session_id)}>
+                          Approve
+                        </button>
+                        <button className="btn-deny" onClick={() => decide("deny", s.session_id)}>
+                          Deny
+                        </button>
+                      </>
+                    )}
+                  </td>
+                )}
+              </tr>
+              <tr>
+                <td colSpan={isOperator ? 4 : 3}>
+                  <SessionEvidence apiKey={apiKey} sessionId={s.session_id} />
                 </td>
-              )}
-            </tr>
+              </tr>
+            </Fragment>
           ))}
         </tbody>
       </table>
@@ -233,9 +361,12 @@ function AuditTab({ apiKey }: { apiKey: string }) {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [chainIntact, setChainIntact] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [decisionFilter, setDecisionFilter] = useState<"all" | "ALLOWED" | "BLOCKED" | "INFO">("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [sessionFilter, setSessionFilter] = useState("");
 
   const refresh = () => {
-    api.events(apiKey, 30).then(setEvents).catch((err) => setError(errorMessage(err)));
+    api.events(apiKey, 200).then(setEvents).catch((err) => setError(errorMessage(err)));
     api
       .verify(apiKey)
       .then((v) => setChainIntact(v.chain_intact))
@@ -246,34 +377,88 @@ function AuditTab({ apiKey }: { apiKey: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
+  const rows = events.map((e) => ({ e, d: describeEvent(e) }));
+  const count = (dec: "ALLOWED" | "BLOCKED" | "INFO") => rows.filter((r) => r.d.decision === dec).length;
+  const types = [...new Set(rows.map((r) => r.d.label))];
+  const shown = rows.filter(
+    (r) =>
+      (decisionFilter === "all" || r.d.decision === decisionFilter) &&
+      (typeFilter === "all" || r.d.label === typeFilter) &&
+      (!sessionFilter || r.e.session_id.includes(sessionFilter))
+  );
+
   return (
     <div className="panel">
-      <h3>Recent audit events (all sessions, current tenant)</h3>
+      <h3>Audit log (latest 200 events, current tenant)</h3>
+      <p className="hint">
+        Every row is one recorded event. ALLOWED / BLOCKED are decisions by the policy engine or content guardrail;
+        INFO rows (LLM calls, operator actions) record what happened and carry no allow-or-deny decision. The
+        guardrail only logs content it blocked.
+      </p>
       <button onClick={refresh}>Refresh</button>
       {error && <div className="result bad">{error}</div>}
       {chainIntact !== null && (
         <div className={`result ${chainIntact ? "ok" : "bad"}`}>
-          {chainIntact ? "Hash chain intact — no tampering detected." : "Hash chain broken — tampering detected!"}
+          {chainIntact ? "Hash chain intact - no tampering detected." : "Hash chain broken - tampering detected!"}
         </div>
       )}
+      <div className="statusbar">
+        <span className="status-up">allowed: {count("ALLOWED")}</span>
+        <span className="status-down">blocked: {count("BLOCKED")}</span>
+        <span>info: {count("INFO")}</span>
+        <span>total: {rows.length}</span>
+      </div>
+      <div className="row">
+        <select value={decisionFilter} onChange={(e) => setDecisionFilter(e.target.value as "all" | "ALLOWED" | "BLOCKED" | "INFO")}>
+          <option value="all">all decisions</option>
+          <option value="ALLOWED">allowed</option>
+          <option value="BLOCKED">blocked</option>
+          <option value="INFO">info</option>
+        </select>
+        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          <option value="all">all event types</option>
+          {types.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <input value={sessionFilter} onChange={(e) => setSessionFilter(e.target.value)} placeholder="filter by session id" />
+      </div>
       <table>
         <thead>
           <tr>
-            <th>Timestamp</th>
+            <th>Time</th>
             <th>Session</th>
-            <th>Action</th>
-            <th>Target</th>
-            <th>Allowed</th>
+            <th>Type</th>
+            <th>Decision</th>
+            <th>What</th>
+            <th>Why / details</th>
+            <th>Raw</th>
           </tr>
         </thead>
         <tbody>
-          {events.map((e) => (
+          {shown.length === 0 && (
+            <tr>
+              <td colSpan={7}>No events match.</td>
+            </tr>
+          )}
+          {shown.map(({ e, d }) => (
             <tr key={e.event_id}>
-              <td>{e.timestamp}</td>
+              <td>{fmtTime(e.timestamp)}</td>
               <td>{e.session_id}</td>
-              <td>{e.action?.action_type}</td>
-              <td>{e.action?.target}</td>
-              <td>{String(e.policy_decision?.allowed)}</td>
+              <td>{d.label}</td>
+              <td>
+                <Badge decision={d.decision} />
+              </td>
+              <td>{d.what}</td>
+              <td>{d.why}</td>
+              <td>
+                <details>
+                  <summary>json</summary>
+                  <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{JSON.stringify(e, null, 2)}</pre>
+                </details>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -283,6 +468,26 @@ function AuditTab({ apiKey }: { apiKey: string }) {
 }
 
 const fmt = (n: number | null | undefined, digits = 0) => (n == null ? "-" : n.toFixed(digits));
+
+// Prompt/response text is only present when the SDK client was created
+// with capture_text=True (off by default, audit events are otherwise
+// hash-only), so a missing value is the normal case, not an error.
+function TextCell({ call }: { call: LlmCall }) {
+  if (call.input_text == null && call.output_text == null) {
+    return <span className="hint">not captured (hash only)</span>;
+  }
+  return (
+    <details>
+      <summary>view</summary>
+      <div>
+        <strong>Input{call.input_truncated ? " (truncated)" : ""}:</strong>
+        <pre style={{ whiteSpace: "pre-wrap", margin: "4px 0" }}>{call.input_text ?? "(none)"}</pre>
+        <strong>Output{call.output_truncated ? " (truncated)" : ""}:</strong>
+        <pre style={{ whiteSpace: "pre-wrap", margin: "4px 0" }}>{call.output_text ?? "(none)"}</pre>
+      </div>
+    </details>
+  );
+}
 
 function LlmTab({ apiKey }: { apiKey: string }) {
   const [data, setData] = useState<LlmSummary | null>(null);
@@ -307,7 +512,7 @@ function LlmTab({ apiKey }: { apiKey: string }) {
       <h3>LLM usage and prompt-injection findings (current tenant)</h3>
       <p className="hint">
         From <code>llm_call</code> audit events recorded by <code>AegisClient.record_llm_call()</code> (last 500
-        calls). Prompt and response text is never stored, only hashes and guardrail verdicts.
+        calls). Prompt and response text appears only if the SDK client was created with capture_text=True; otherwise only hashes and guardrail verdicts are stored.
       </p>
       <button onClick={refresh}>Refresh</button>
       {error && <div className="result bad">{error}</div>}
@@ -327,6 +532,10 @@ function LlmTab({ apiKey }: { apiKey: string }) {
             </span>
             <span className={t.flagged_calls ? "status-down" : "status-up"}>flagged calls: {t.flagged_calls}</span>
             {t.unscanned_calls > 0 && <span className="status-down">unscanned: {t.unscanned_calls}</span>}
+          </div>
+
+          <div className="grid-charts" style={{ marginTop: 14 }}>
+            <LlmCharts recent={data.recent} />
           </div>
 
           <h4>By model</h4>
@@ -364,21 +573,25 @@ function LlmTab({ apiKey }: { apiKey: string }) {
                 <th>Model</th>
                 <th>Categories</th>
                 <th>Matched patterns</th>
+                <th>Input / output</th>
               </tr>
             </thead>
             <tbody>
               {data.flagged.length === 0 && (
                 <tr>
-                  <td colSpan={5}>No flagged calls.</td>
+                  <td colSpan={6}>No flagged calls.</td>
                 </tr>
               )}
               {data.flagged.map((c) => (
                 <tr key={c.event_id}>
-                  <td>{c.timestamp}</td>
+                  <td>{fmtTime(c.timestamp)}</td>
                   <td>{c.session_id}</td>
                   <td>{c.model}</td>
                   <td>{c.categories.join(", ")}</td>
                   <td>{c.types.join(", ")}</td>
+                  <td>
+                    <TextCell call={c} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -395,12 +608,13 @@ function LlmTab({ apiKey }: { apiKey: string }) {
                 <th>Latency (ms)</th>
                 <th>Cost</th>
                 <th>Verdict</th>
+                <th>Input / output</th>
               </tr>
             </thead>
             <tbody>
               {data.recent.map((c) => (
                 <tr key={c.event_id}>
-                  <td>{c.timestamp}</td>
+                  <td>{fmtTime(c.timestamp)}</td>
                   <td>{c.session_id}</td>
                   <td>{c.model}</td>
                   <td>
@@ -409,6 +623,9 @@ function LlmTab({ apiKey }: { apiKey: string }) {
                   <td>{fmt(c.latency_ms)}</td>
                   <td>{c.cost_usd == null ? "-" : c.cost_usd.toFixed(4)}</td>
                   <td>{!c.scanned ? "not scanned" : c.flagged ? `FLAGGED: ${c.categories.join(", ")}` : "clean"}</td>
+                  <td>
+                    <TextCell call={c} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -419,55 +636,128 @@ function LlmTab({ apiKey }: { apiKey: string }) {
   );
 }
 
+const TAB_LABELS: Record<Tab, string> = {
+  overview: "Overview",
+  check: "Policy check",
+  credential: "Credentials",
+  approvals: "Approvals",
+  audit: "Audit log",
+  llm: "LLM",
+};
+
+const THEME_KEY = "aegis-dashboard-theme";
+
+function useTheme(): ["light" | "dark", () => void] {
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+  return [theme, () => setTheme(theme === "dark" ? "light" : "dark")];
+}
+
 export default function App() {
-  const [tab, setTab] = useState<Tab>("check");
+  const [tab, setTab] = useState<Tab>("overview");
   const [apiKey, setApiKey] = useApiKey();
   const [sessionId, setSessionId] = useSessionId();
+  const [theme, toggleTheme] = useTheme();
   // Managed-dashboard-for-security-teams work (2026-09-28, see
   // PROGRESS.md): lifted up from StatusBar so role/operator (from the
   // same /api/status call) can gate the operator-only controls in every
   // tab below, not just be displayed in the status bar itself.
   const { status, error } = useDashboardStatus(apiKey);
   const isOperator = status?.role === "operator";
+  const [waiting, setWaiting] = useState(0);
+
+  // Badge on the Approvals tab: how many sessions are waiting for a person.
+  useEffect(() => {
+    if (!status) {
+      setWaiting(0);
+      return;
+    }
+    const load = () =>
+      api
+        .suspended(apiKey)
+        .then((s) => setWaiting(s.filter((x) => !x.terminated).length))
+        .catch(() => undefined);
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, [apiKey, status]);
 
   return (
     <div className="app">
-      <h1>AEGIS — containment flow viewer</h1>
-      <p className="hint">
-        Every action here goes through the same real services as the CLI/test scripts. Nothing is simulated.
-      </p>
-      <StatusBar status={status} error={error} />
-
-      <div className="row">
-        <label>
-          API Key:{" "}
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="paste your dashboard API key"
-          />
-        </label>
-        <label>
-          Session ID:{" "}
-          <input value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
-        </label>
-        <button onClick={() => setSessionId(`dashboard-${Date.now()}`)}>New session</button>
-      </div>
-
-      <div className="tabs">
-        {(["check", "credential", "approvals", "audit", "llm"] as Tab[]).map((t) => (
-          <button key={t} className={tab === t ? "tab active" : "tab"} onClick={() => setTab(t)}>
-            {t}
+      <header className="topbar">
+        <div className="brand">
+          <div className="brand-mark" aria-hidden="true">
+            A
+          </div>
+          <div>
+            <h1>AEGIS</h1>
+            <p className="hint">Containment for AI agents · live view of the real services</p>
+          </div>
+        </div>
+        <div className="pills">
+          <StatusBar status={status} error={error} />
+          <button className="btn-ghost" onClick={toggleTheme} aria-label="Toggle light and dark theme">
+            {theme === "dark" ? "☀ Light" : "☾ Dark"}
           </button>
-        ))}
+        </div>
+      </header>
+
+      <div className="card connect">
+        <div className="row" style={{ margin: 0 }}>
+          <label>
+            API key
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="paste your dashboard API key"
+              style={{ minWidth: 260 }}
+            />
+          </label>
+          <label>
+            Session
+            <input value={sessionId} onChange={(e) => setSessionId(e.target.value)} style={{ minWidth: 230 }} />
+          </label>
+          <button className="btn-ghost" onClick={() => setSessionId(`dashboard-${Date.now()}`)}>
+            New session
+          </button>
+        </div>
       </div>
 
-      {tab === "check" && <CheckTab apiKey={apiKey} sessionId={sessionId} isOperator={isOperator} />}
-      {tab === "credential" && <CredentialTab apiKey={apiKey} sessionId={sessionId} isOperator={isOperator} />}
-      {tab === "approvals" && <ApprovalsTab apiKey={apiKey} isOperator={isOperator} />}
-      {tab === "audit" && <AuditTab apiKey={apiKey} />}
-      {tab === "llm" && <LlmTab apiKey={apiKey} />}
+      {!status ? (
+        <div className="card empty-state">
+          <h2>Connect to see your data</h2>
+          <p className="hint">
+            Paste a dashboard API key above. The demo keys are in <code>config.py</code> under{" "}
+            <code>DASHBOARD_API_KEYS</code>; the key decides which tenant you see.
+          </p>
+        </div>
+      ) : (
+        <>
+          <nav className="tabs">
+            {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
+              <button key={t} className={tab === t ? "tab active" : "tab"} onClick={() => setTab(t)}>
+                {TAB_LABELS[t]}
+                {t === "approvals" && waiting > 0 && <span className="count">{waiting}</span>}
+              </button>
+            ))}
+          </nav>
+
+          {tab === "overview" && <OverviewTab apiKey={apiKey} goTo={setTab} />}
+          {tab === "check" && <CheckTab apiKey={apiKey} sessionId={sessionId} isOperator={isOperator} />}
+          {tab === "credential" && <CredentialTab apiKey={apiKey} sessionId={sessionId} isOperator={isOperator} />}
+          {tab === "approvals" && <ApprovalsTab apiKey={apiKey} isOperator={isOperator} />}
+          {tab === "audit" && <AuditTab apiKey={apiKey} />}
+          {tab === "llm" && <LlmTab apiKey={apiKey} />}
+        </>
+      )}
     </div>
   );
 }

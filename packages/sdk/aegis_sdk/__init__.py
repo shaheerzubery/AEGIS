@@ -119,7 +119,17 @@ class AegisClient:
         session_id: str | None = None,
         tenant_id: str = "default",
         pricing: dict[str, tuple[float, float]] | None = None,
+        capture_text: bool = False,
+        capture_max_chars: int = 2000,
     ):
+        # capture_text: OFF by default. When True, record_llm_call() also
+        # stores the prompt and response text (truncated to
+        # capture_max_chars) in the audit event so the dashboard can show
+        # them. The audit log is hash-chained and append-only, so stored text
+        # cannot be deleted later and may contain PII or secrets; leave this
+        # off unless that is acceptable for your data.
+        self.capture_text = capture_text
+        self.capture_max_chars = capture_max_chars
         # pricing: optional {model_id: (usd_per_1M_input_tokens,
         # usd_per_1M_output_tokens)} used by record_llm_call() to compute
         # cost. Deliberately caller-supplied: prices change and differ by
@@ -236,10 +246,12 @@ class AegisClient:
         The verdict is recorded for EVERY scanned call, clean or not
         (content-guardrail itself only logs the blocked ones), so the audit
         trail answers both "was this session ever injected?" and "how many
-        calls were checked at all?". Raw text is never stored: only its
+        calls were checked at all?". By default raw text is not stored: only its
         SHA-256, length, and the guardrail's category/type verdicts, so a
         flagged call can be matched back to the original text by whoever
-        holds it without the audit log becoming a prompt archive.
+        holds it without the audit log becoming a prompt archive. The
+        exception is the client's opt-in capture_text=True, which also
+        stores a truncated copy of each text.
 
         Returns the recorded summary. With enforce=True, raises ContentDenied
         when the prompt or response is flagged (after recording it). Like the
@@ -259,6 +271,9 @@ class AegisClient:
                 "categories": (verdict or {}).get("categories", []),
                 "types": sorted({m["type"] for m in (verdict or {}).get("matches", []) if m.get("type")}),
             }
+            if self.capture_text:
+                entry["text"] = text[: self.capture_max_chars]
+                entry["truncated"] = len(text) > self.capture_max_chars
             content[direction] = entry
             if entry["flagged"] and flagged_by is None:
                 flagged_by = (direction, entry["categories"])

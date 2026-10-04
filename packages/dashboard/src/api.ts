@@ -48,8 +48,23 @@ export interface AuditEvent {
   tenant_id: string;
   session_id: string;
   event_type: string;
+  severity?: string;
   action?: { action_type?: string; target?: string; method?: string | null };
   policy_decision?: { allowed?: boolean; reason?: string | null };
+  // content_guardrail_decision events
+  matches?: { category?: string; type?: string; masked_sample?: string }[];
+  // dashboard_operator_action events
+  operator?: string;
+  // llm_call events (see packages/sdk record_llm_call)
+  llm?: {
+    provider?: string | null;
+    model?: string | null;
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    latency_ms?: number | null;
+    prompt_injection_suspected?: boolean;
+    content?: Record<string, { flagged?: boolean; categories?: string[]; types?: string[] }>;
+  };
 }
 
 export interface CheckOutcome {
@@ -69,6 +84,15 @@ export interface BreakerStatus {
   violations_in_window: number;
   suspended: boolean;
   terminated: boolean;
+}
+
+export interface AnomalyScore {
+  tenant_id: string;
+  session_id: string;
+  score: number;
+  severity: string;
+  flags: string[];
+  actions_in_window: number;
 }
 
 export interface SuspendedSession {
@@ -94,6 +118,10 @@ export interface LlmCall {
   categories: string[];
   types: string[];
   scanned: boolean;
+  input_text: string | null;
+  output_text: string | null;
+  input_truncated: boolean;
+  output_truncated: boolean;
 }
 
 export interface LlmSummary {
@@ -133,6 +161,8 @@ export const api = {
     postJSON<CredentialOutcome>(apiKey, "/api/credential", { session_id: sessionId, service, action }),
   breakerStatus: (apiKey: string, sessionId: string) =>
     getJSON<BreakerStatus>(apiKey, `/api/breaker/status/${sessionId}`),
+  anomalyScore: (apiKey: string, sessionId: string) =>
+    getJSON<AnomalyScore>(apiKey, `/api/anomaly/score/${sessionId}`),
   suspended: (apiKey: string) => getJSON<SuspendedSession[]>(apiKey, "/api/breaker/suspended"),
   resume: (apiKey: string, sessionId: string) => postJSON<unknown>(apiKey, `/api/breaker/resume/${sessionId}`, {}),
   deny: (apiKey: string, sessionId: string) => postJSON<unknown>(apiKey, `/api/breaker/deny/${sessionId}`, {}),

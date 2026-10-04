@@ -98,7 +98,16 @@ def _summarize_llm_events(events: list[dict]) -> dict:
                 "flagged": any(c.get("flagged") for c in content.values()),
                 "categories": sorted({cat for c in content.values() for cat in c.get("categories", [])}),
                 "types": sorted({t for c in content.values() for t in c.get("types", [])}),
-                "scanned": bool(content) and all(c.get("scanned") for c in content.values()),
+                # Present only when the SDK client was created with
+                # capture_text=True; otherwise None (hash-only audit events).
+                "input_text": (content.get("input") or {}).get("text"),
+                "output_text": (content.get("output") or {}).get("text"),
+                "input_truncated": bool((content.get("input") or {}).get("truncated")),
+                "output_truncated": bool((content.get("output") or {}).get("truncated")),
+                # "Unscanned" means the guardrail was asked to check some text
+                # and was unreachable. A call with no text at all (e.g. a
+                # tool-result-only turn) had nothing to scan, so it isn't.
+                "scanned": all(c.get("scanned") for c in content.values()),
             }
         )
 
@@ -202,8 +211,7 @@ class Handler(BaseHTTPRequestHandler):
         content_type = self.headers.get("Content-Type", "")
         if not content_type.split(";")[0].strip() == "application/json":
             raise ValueError(f"expected application/json, got {content_type!r}")
-        length = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(length) or b"{}") if length else {}
+        return json.loads(self._raw_body) if self._raw_body else {}
 
     # ---- status ----
 
@@ -325,6 +333,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _handle_resume(self, session_id: str):
+        self._read_json_body()  # content-type check, same as the other POST handlers
         try:
             req = urllib.request.Request(
                 f"{BREAKER_URL}/resume/{self.tenant_id}/{session_id}", data=b"{}", method="POST"
@@ -336,6 +345,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(502, {"error": f"circuit breaker unreachable: {exc}"})
 
     def _handle_deny(self, session_id: str):
+        self._read_json_body()  # content-type check, same as the other POST handlers
         try:
             # Attributes this to the real named operator from the API
             # key, not a generic string — a security team needs to know
@@ -447,6 +457,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "not found"})
 
     def do_POST(self):
+        # Always consume the request body up front, before any early return
+        # (bad origin, bad key, viewer role) or handler that doesn't read it.
+        # This server speaks HTTP/1.1 keep-alive, so an unread body is parsed
+        # as the start of the NEXT request on the same connection: the
+        # browser's follow-up refresh after Approve/Deny got a 501 with no
+        # CORS headers, which fetch() reports as "Failed to fetch".
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        self._raw_body = self.rfile.read(length) if length else b""
+
         # Every POST here is state-changing (a policy check that gets
         # audit-logged and can trip the circuit breaker, a real credential
         # invocation, or an approve/deny) — both checks below run before
