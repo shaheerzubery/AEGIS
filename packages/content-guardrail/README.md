@@ -3,9 +3,8 @@
 AEGIS's six proposal layers govern actions, network egress, and
 credentials — none of them look at the actual TEXT flowing to or from the
 LLM itself. This service does exactly that. Added directly per request,
-not derived from the business proposal's own roadmap — see
-[PLAN.md](../../PLAN.md)'s "Also done, requested directly" section (same
-category as `config.py`'s consolidation).
+not derived from the business proposal's own roadmap (same category as
+`config.py`'s consolidation).
 
 ## What it checks
 

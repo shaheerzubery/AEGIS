@@ -1,6 +1,6 @@
 # packages/compliance — compliance evidence package
 
-Sprint 4 per [PLAN.md](../../PLAN.md): "SOC 2 compliance package — pre-built
+Sprint 4: "SOC 2 compliance package — pre-built
 policy templates and audit reports for SOC 2 Type II certification" (the
 proposal's own wording, §8). Extended 2026-09-27 to the proposal's Phase 2
 enterprise tier (§7.2): HIPAA, PCI-DSS, and EU AI Act templates + mappings,

@@ -30,3 +30,8 @@ dist/
 # local secrets
 credintials.txt
 credentials.txt
+
+# internal planning / business docs (kept locally, not in the repo)
+PLAN.md
+PROGRESS.md
+AEGIS_Business_Proposal.docx

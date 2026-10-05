@@ -4,10 +4,6 @@ Model-agnostic containment sidecar that sits between any AI agent and the outsid
 world: egress control, credential vaulting, action-level policy, behavioural
 anomaly detection, a circuit breaker / kill switch, and an immutable audit log.
 
-Full business/technical context: `AEGIS_Business_Proposal.docx`.
-Build order and roadmap: [PLAN.md](PLAN.md). What's actually built and
-verified so far: [PROGRESS.md](PROGRESS.md).
-
 ## Repo layout
 
 - `packages/proxy` — Layer 1: transparent egress proxy (Envoy), OPA-driven allow/deny, with a filtering DNS resolver (`dns-filter/`) blocking rebinding to private/internal addresses
@@ -31,9 +27,8 @@ SDK + all three framework wrappers, audit log with tamper detection, circuit
 breaker with rate limiting, credential vaulting, live policy updates,
 anomaly detection, the dashboard, human-in-the-loop approvals, SIEM
 integration, incident replay). Sprint 4 is in progress (multi-tenancy and
-load testing are done; see PROGRESS.md for a real, unexpected finding from
-the load test). See [PROGRESS.md](PROGRESS.md) for exactly what's been
-tested and what known gaps remain.
+load testing are done; the load test turned up a real, unexpected finding,
+see `demo/load_test_results.md`).
 
 ## Configuration
 
